@@ -317,13 +317,13 @@ async function wrapDEK(dekRaw,kek){
   const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},kek,dekRaw);
   return 'WRAPPED:'+bufToB64(iv.buffer)+':'+bufToB64(ct);
 }
-// 用 KEK 解包 DEK，返回 CryptoKey
+// 用 KEK 解包 DEK，返回 CryptoKey（extractable:true，以便 changePassword 时可重新导出包裹）
 async function unwrapDEK(wrapped,kek){
   if(!wrapped||!wrapped.startsWith('WRAPPED:'))return null;
   try{
     const parts=wrapped.split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));
     const dekRaw=await crypto.subtle.decrypt({name:'AES-GCM',iv},kek,ct);
-    return crypto.subtle.importKey('raw',dekRaw,'AES-GCM',false,['encrypt','decrypt']);
+    return crypto.subtle.importKey('raw',dekRaw,'AES-GCM',true,['encrypt','decrypt']);
   }catch(e){return null;}
 }
 async function encryptValue(plainText){if(!_cryptoKey)throw new Error('未登录，无法加密');if(plainText===null||plainText===undefined||plainText==='')return '';const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},_cryptoKey,enc.encode(String(plainText)));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
