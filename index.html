@@ -12,7 +12,7 @@
         content="default-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
                  img-src 'self' data: https:;
-                 connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co https://nkpnlhlobpnlbayutslm.supabase.co/storage/v1/object https://nkpnlhlobpnlbayutslm.supabase.co/storage/v1/object/sign;
+                 connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co;
                  font-src 'self';
                  script-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
@@ -2374,6 +2374,7 @@ function _genId() {
 }
 
 /* ---------- Supabase REST 工具 ---------- */
+/* 数据库 REST API（/rest/v1/） */
 async function _sbFetch(path, opts = {}) {
   const ctrl = new AbortController();
   const tid  = setTimeout(() => ctrl.abort(), 10000);
@@ -2388,6 +2389,30 @@ async function _sbFetch(path, opts = {}) {
         'Prefer': opts._prefer || 'return=representation',
         ...(opts.headers || {})
       }
+    });
+    clearTimeout(tid);
+    return res;
+  } catch(e) { clearTimeout(tid); throw e; }
+}
+
+/* Storage API（/storage/v1/） — 路径与数据库不同，单独封装 */
+async function _sbStorage(path, opts = {}) {
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), 30000); // 上传允许更长超时
+  try {
+    const headers = {
+      'apikey': _SB_KEY,
+      'Authorization': 'Bearer ' + _SB_KEY,
+      ...(opts.headers || {})
+    };
+    // 非二进制请求才加 Content-Type: application/json
+    if (!(opts.body instanceof File) && !(opts.body instanceof Blob) && !(opts.body instanceof ArrayBuffer)) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const res = await fetch(_SB_URL + '/storage/v1/' + path, {
+      ...opts,
+      signal: ctrl.signal,
+      headers
     });
     clearTimeout(tid);
     return res;
@@ -3530,8 +3555,8 @@ function deleteDoc(id) {
     try {
       // 同步删除 Supabase Storage 里的文件
       if (doc?.storage_path) {
-        await _sbFetch(`storage/v1/object/tdp-documents/${encodeURIComponent(doc.storage_path)}`,
-          { method:'DELETE', _prefer:'return=minimal' }).catch(()=>{});
+        await _sbStorage(`object/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
+          { method:'DELETE' }).catch(()=>{});
       }
       await apiDelete('product_docs', id);
       showToast('已删除', 'success');
@@ -3541,7 +3566,6 @@ function deleteDoc(id) {
 }
 
 /* ========== Supabase Storage 上传 / 临时链接 ========== */
-
 const _SB_BUCKET = 'tdp-documents';
 
 /* 重置上传区域到初始状态 */
@@ -3589,6 +3613,7 @@ async function _uploadDocToStorage(file) {
     // 用 XMLHttpRequest 实现上传进度
     await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      // 正确路径：/storage/v1/object/{bucket}/{path}
       xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${encodeURIComponent(storagePath)}`);
       xhr.setRequestHeader('apikey', _SB_KEY);
       xhr.setRequestHeader('Authorization', 'Bearer ' + _SB_KEY);
@@ -3677,15 +3702,14 @@ async function openDocFile(docId) {
   // 生成 60 秒有效的签名临时链接
   showToast('⏳ 正在生成安全链接...', 'info');
   try {
-    const res = await _sbFetch(
-      `storage/v1/object/sign/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
+    const res = await _sbStorage(
+      `object/sign/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
       {
         method: 'POST',
         body: JSON.stringify({ expiresIn: 60 }),
-        _prefer: 'return=representation'
       }
     );
-    if (!res.ok) throw new Error('生成链接失败');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const signedUrl = _SB_URL + data.signedURL;
     window.open(signedUrl, '_blank');
@@ -3701,12 +3725,11 @@ const _SB_FREE_BYTES = 1 * 1024 * 1024 * 1024; // 1 GB 免费额度
 async function calcStorageUsage() {
   try {
     // 列出桶内所有文件（递归）
-    const res = await _sbFetch(
-      `storage/v1/object/list/${_SB_BUCKET}`,
+    const res = await _sbStorage(
+      `object/list/${_SB_BUCKET}`,
       {
         method: 'POST',
         body: JSON.stringify({ prefix: '', limit: 10000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
-        _prefer: 'return=representation'
       }
     );
     if (!res.ok) return null;
