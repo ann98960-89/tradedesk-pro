@@ -12,7 +12,7 @@
         content="default-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
                  img-src 'self' data: https:;
-                 connect-src 'self' https://static.cloudflareinsights.com;
+                 connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co;
                  font-src 'self';
                  script-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
@@ -760,6 +760,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
         <i class="fas fa-search search-icon"></i>
         <input type="text" placeholder="搜索客户、产品..." id="global-search" oninput="globalSearch(this.value)">
       </div>
+      <span id="sync-status-badge" title="Supabase 云同步状态" style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;cursor:default;">⏳ 连接中</span>
       <button class="btn btn-primary btn-sm" id="header-add-btn" onclick="handleHeaderAdd()">
         <i class="fas fa-plus"></i> 新建
       </button>
@@ -2260,9 +2261,12 @@ function switchDetailTab(tab) {
 
 /* ---------- 配置 ---------- */
 const _STORE_PREFIX = 'tdp_table_';
-const _CLOUD_BASE   = ''; // 独立部署：已禁用云端同步，纯本地模式
-const _SYNC_FLAG    = 'tdp_cloud_synced';
 const _ALL_TABLES   = ['customers','todos','followups','customer_investigation','product_docs','trial_feedback'];
+
+/* ---------- Supabase 云同步配置 ---------- */
+const _SB_URL  = 'https://nkpnlhlobpnlbayutslm.supabase.co';
+const _SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5rcG5saGxvYnBubGJheXV0c2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1NDMwMTksImV4cCI6MjA5MTExOTAxOX0.WfxvFvsUWbgly1kunDQsVe8rKcRA4vfdY_GbtdKWG2k';
+let _sbAvailable = null; // null=未检测 true=可用 false=不可用
 
 /* ---------- 本地存储加密工具 ---------- */
 function _storeKey(t) { return _STORE_PREFIX + t; }
@@ -2322,34 +2326,102 @@ function _genId() {
   return 'tdp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
 }
 
-/* ---------- 云端 API 工具 ---------- */
-async function _cloudFetch(path, opts = {}) {
+/* ---------- Supabase REST 工具 ---------- */
+async function _sbFetch(path, opts = {}) {
   const ctrl = new AbortController();
-  const tid  = setTimeout(() => ctrl.abort(), 8000);
+  const tid  = setTimeout(() => ctrl.abort(), 10000);
   try {
-    const res = await fetch(_CLOUD_BASE + path, {
-      ...opts, signal: ctrl.signal, credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    const res = await fetch(_SB_URL + '/rest/v1/' + path, {
+      ...opts,
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': _SB_KEY,
+        'Authorization': 'Bearer ' + _SB_KEY,
+        'Prefer': opts._prefer || 'return=representation',
+        ...(opts.headers || {})
+      }
     });
     clearTimeout(tid);
     return res;
   } catch(e) { clearTimeout(tid); throw e; }
 }
 
-/* 独立部署模式：云端同步已禁用，纯 localStorage */
-let _cloudAvailable = false;
-async function _checkCloud() { return false; }
-
-/* 独立部署：云端同步已移除，数据仅存于 localStorage（AES-256-GCM加密）*/
-async function _pullFromCloud() {
-  // 独立部署模式：无操作
-  return;
+/* 检测 Supabase 是否可用（缓存结果）*/
+async function _checkCloud() {
+  if (_sbAvailable !== null) return _sbAvailable;
+  try {
+    const res = await _sbFetch('todos?limit=1&select=id', { _prefer: 'return=minimal' });
+    _sbAvailable = res.ok;
+  } catch(e) { _sbAvailable = false; }
+  console.log('[TDP] ☁️ Supabase:', _sbAvailable ? '已连接' : '不可用（离线模式）');
+  _updateSyncBadge();
+  return _sbAvailable;
 }
 
-/* 独立部署模式：_pushToCloud 为空操作，所有数据仅存本地 */
+/* 启动时从 Supabase 拉取全量数据，与本地合并（取 updated_at 较新者）*/
+async function _pullFromCloud() {
+  if (!await _checkCloud()) return;
+  console.log('[TDP] ☁️ 开始从 Supabase 拉取数据...');
+  let total = 0;
+  for (const tbl of _ALL_TABLES) {
+    try {
+      const res = await _sbFetch(`${tbl}?limit=5000&order=updated_at.desc&select=*`);
+      if (!res.ok) continue;
+      const remote = await res.json();
+      if (!Array.isArray(remote) || !remote.length) continue;
+      const local  = await _loadTableDecrypted(tbl);
+      const map    = {};
+      local.forEach(r => { map[r.id] = r; });
+      remote.forEach(r => {
+        if (!map[r.id] || (r.updated_at||0) > (map[r.id].updated_at||0)) {
+          map[r.id] = r;
+        }
+      });
+      const merged = Object.values(map);
+      await _saveTableEncrypted(tbl, merged);
+      total += remote.length;
+    } catch(e) { console.warn('[TDP] 拉取表', tbl, '失败:', e.message); }
+  }
+  console.log(`[TDP] ☁️✅ 云端同步完成，共拉取 ${total} 条`);
+  _updateSyncBadge(true);
+}
+
+/* 单条记录推送到 Supabase */
 async function _pushToCloud(action, table, id, data) {
-  // 独立部署：无云端，直接返回
-  return;
+  if (!await _checkCloud()) return;
+  // 过滤掉本地专用字段
+  const clean = Object.fromEntries(
+    Object.entries(data).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
+  );
+  try {
+    if (action === 'post') {
+      await _sbFetch(table, { method:'POST', body:JSON.stringify(clean), _prefer:'return=minimal' });
+    } else if (action === 'put') {
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
+    } else if (action === 'patch') {
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
+    } else if (action === 'delete') {
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, updated_at:Date.now()}), _prefer:'return=minimal' });
+    }
+    _updateSyncBadge(true);
+  } catch(e) { console.warn('[TDP] 推送失败（不影响本地）:', e.message); }
+}
+
+/* 云同步状态角标 */
+function _updateSyncBadge(synced) {
+  const el = document.getElementById('sync-status-badge');
+  if (!el) return;
+  if (_sbAvailable === false) {
+    el.innerHTML = '⚡ 离线';
+    el.style.cssText = 'background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;';
+  } else if (synced) {
+    el.innerHTML = '☁️ 已同步';
+    el.style.cssText = 'background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;';
+  } else {
+    el.innerHTML = '☁️ 同步中...';
+    el.style.cssText = 'background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;';
+  }
 }
 
 /* ========== 对外 API 接口（异步加密存储版）========== */
@@ -2454,10 +2526,12 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-/* 独立部署模式：无云端同步，数据安全存于本地加密存储 */
-window._tdpCloudSync = function() { /* 独立模式，无需云同步 */ };
+/* Supabase 双层存储模式：本地 AES-256-GCM + 云端实时同步 */
+window._tdpCloudSync = async function() {
+  await _pullFromCloud();
+};
 
-console.log('[TDP] ✅ 独立部署模式 | 数据 AES-256-GCM 加密存于 localStorage');
+console.log('[TDP] ✅ Supabase 云同步模式 | 本地 AES-256-GCM 加密 + Supabase 云端备份');
 
 /* recycle.js 需要的 PATCH 等价操作 */
 async function softDelete(table, id, label) {
@@ -4801,8 +4875,15 @@ function _tdpInitPage() {
   updateBadges();
   if(typeof initBackupCheck==='function') initBackupCheck();
   if(typeof updateRecycleBadge==='function') updateRecycleBadge();
-  // 后台拉取云端数据，合并到本地（1秒延迟，不阻塞UI）
-  if(typeof window._tdpCloudSync==='function') window._tdpCloudSync();
+  // 登录后 1.5 秒开始拉取 Supabase 云端数据，拉完后刷新当前页面
+  setTimeout(async () => {
+    if(typeof window._tdpCloudSync==='function') {
+      await window._tdpCloudSync();
+      // 云同步完成后重新加载当前页面数据
+      if(typeof loadDashboard==='function') loadDashboard();
+      if(typeof updateBadges==='function') updateBadges();
+    }
+  }, 1500);
 }
 
 /* 页面初始化时检查登录状态 */
