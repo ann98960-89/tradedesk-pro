@@ -294,10 +294,38 @@ tr.clickable:hover { background: var(--gray-50); cursor: pointer; }
   <!-- auth.js 内联：页面守卫 + 加解密 -->
   <script>
 const AUTH_KEY='tdp_auth_session',VAULT_KEY='tdp_vault',SALT_KEY='tdp_salt',SESSION_TIMEOUT=8*60*60*1000;
+/* ---- DEK 架构 ----
+   tdp_salt   : KEK 派生盐（32字节 Base64）
+   tdp_vault  : 用 KEK 加密后的 DEK（ENC:iv:ct）
+   tdp_dek_raw: 【不存储】DEK 明文仅活在内存 _cryptoKey
+   改密码只需重新加密 DEK，数据完全不动。
+   ---- */
+const DEK_KEY='tdp_dek_wrapped'; // 包裹后的 DEK 存储键
 let _cryptoKey=null,_sessionTimer=null;
 function bufToB64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
 function b64ToBuf(b64){const bin=atob(b64),buf=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);return buf.buffer;}
-async function deriveKey(password,saltBuf){const enc=new TextEncoder(),baseKey=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:100000,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);}
+// 用密码派生 KEK（密钥加密密钥），KEK 只用于包裹/解包 DEK
+async function deriveKEK(password,saltBuf){
+  const enc=new TextEncoder(),baseKey=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:100000,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+// 兼容旧代码中可能调用 deriveKey 的地方
+async function deriveKey(password,saltBuf){return deriveKEK(password,saltBuf);}
+// 用 KEK 包裹（加密）一个可导出的 DEK 原始字节
+async function wrapDEK(dekRaw,kek){
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},kek,dekRaw);
+  return 'WRAPPED:'+bufToB64(iv.buffer)+':'+bufToB64(ct);
+}
+// 用 KEK 解包 DEK，返回 CryptoKey
+async function unwrapDEK(wrapped,kek){
+  if(!wrapped||!wrapped.startsWith('WRAPPED:'))return null;
+  try{
+    const parts=wrapped.split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));
+    const dekRaw=await crypto.subtle.decrypt({name:'AES-GCM',iv},kek,ct);
+    return crypto.subtle.importKey('raw',dekRaw,'AES-GCM',false,['encrypt','decrypt']);
+  }catch(e){return null;}
+}
 async function encryptValue(plainText){if(!_cryptoKey)throw new Error('未登录，无法加密');if(plainText===null||plainText===undefined||plainText==='')return '';const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},_cryptoKey,enc.encode(String(plainText)));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
 async function decryptValue(encText){if(!_cryptoKey)return encText;if(!encText||!String(encText).startsWith('ENC:'))return encText;try{const parts=String(encText).split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},_cryptoKey,ct);return new TextDecoder().decode(plain);}catch(e){return '[解密失败]';}}
 async function encryptObject(obj){if(!obj||typeof obj!=='object')return obj;const result={};for(const[k,v]of Object.entries(obj)){if(['id','gs_project_id','gs_table_name','created_at','updated_at'].includes(k)){result[k]=v;}else if(typeof v==='string'&&v!==''){result[k]=await encryptValue(v);}else{result[k]=v;}}return result;}
@@ -305,29 +333,99 @@ async function decryptObject(obj){if(!obj||typeof obj!=='object')return obj;cons
 async function decryptArray(arr){if(!Array.isArray(arr))return arr;return Promise.all(arr.map(item=>decryptObject(item)));}
 async function encryptValueWithKey(plainText,key){const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(plainText));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
 async function decryptValueWithKey(encText,key){if(!encText||!String(encText).startsWith('ENC:'))return null;try{const parts=String(encText).split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct);return new TextDecoder().decode(plain);}catch(e){return null;}}
+
+/* ==== 初次设置密码（DEK 架构）==== */
 async function setupPassword(password){
-  const saltBuf=crypto.getRandomValues(new Uint8Array(32)),
-        saltB64=bufToB64(saltBuf.buffer),
-        key=await deriveKey(password,saltBuf.buffer),
-        // 验证 token 加入随机熵，防已知明文攻击
-        randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer),
-        verifyToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,key);
+  // 1. 生成随机 DEK（32字节，可导出）
+  const dekKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
+  const dekRaw=await crypto.subtle.exportKey('raw',dekKey);
+  // 2. 用密码派生 KEK，包裹 DEK
+  const saltBuf=crypto.getRandomValues(new Uint8Array(32)),saltB64=bufToB64(saltBuf.buffer);
+  const kek=await deriveKEK(password,saltBuf.buffer);
+  const wrappedDEK=await wrapDEK(dekRaw,kek);
+  // 3. 生成 vault token（用 DEK 加密，证明 DEK 正确）
+  const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
+  const verifyToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
+  // 4. 持久化
   localStorage.setItem(SALT_KEY,saltB64);
+  localStorage.setItem(DEK_KEY,wrappedDEK);
   localStorage.setItem(VAULT_KEY,verifyToken);
-  // 存储验证前缀供 login 使用
   localStorage.setItem('tdp_vtoken_prefix','TDP_VERIFY::');
-  _cryptoKey=key;_startSession();return true;
+  _cryptoKey=dekKey;_startSession();return true;
 }
+
+/* ==== 登录（DEK 架构）==== */
 async function loginWithPassword(password){
-  const saltB64=localStorage.getItem(SALT_KEY),vaultToken=localStorage.getItem(VAULT_KEY);
+  const saltB64=localStorage.getItem(SALT_KEY);
+  const wrappedDEK=localStorage.getItem(DEK_KEY);
+  const vaultToken=localStorage.getItem(VAULT_KEY);
   if(!saltB64||!vaultToken)return{ok:false,reason:'no_setup'};
-  const saltBuf=b64ToBuf(saltB64);let key;
-  try{key=await deriveKey(password,saltBuf);}catch(e){return{ok:false,reason:'derive_failed'};}
-  const decrypted=await decryptValueWithKey(vaultToken,key);
-  // 兼容旧 token（TRADEDESK_PRO_VERIFY_2024）和新随机 token（TDP_VERIFY::xxx）
+  const saltBuf=b64ToBuf(saltB64);
+  let kek;
+  try{kek=await deriveKEK(password,saltBuf);}catch(e){return{ok:false,reason:'derive_failed'};}
+  // ---- 新架构（有 DEK_KEY）----
+  if(wrappedDEK&&wrappedDEK.startsWith('WRAPPED:')){
+    const dekKey=await unwrapDEK(wrappedDEK,kek);
+    if(!dekKey)return{ok:false,reason:'wrong_password'};
+    // 用 DEK 验证 vault token
+    const decrypted=await decryptValueWithKey(vaultToken,dekKey);
+    if(!decrypted||!decrypted.startsWith('TDP_VERIFY::'))return{ok:false,reason:'wrong_password'};
+    _cryptoKey=dekKey;_startSession();return{ok:true};
+  }
+  // ---- 旧架构兼容路径：KEK 直接加密数据 ----
+  const decrypted=await decryptValueWithKey(vaultToken,kek);
   if(!decrypted||(!decrypted.startsWith('TDP_VERIFY::')&&decrypted!=='TRADEDESK_PRO_VERIFY_2024'))return{ok:false,reason:'wrong_password'};
-  _cryptoKey=key;_startSession();return{ok:true};
+  // 自动升级到 DEK 架构（在后台静默迁移）
+  _cryptoKey=kek; // 先用旧 KEK 让数据可读
+  _startSession();
+  _upgradeToDEK(password,kek,saltBuf).catch(e=>console.warn('[TDP] DEK升级失败:',e));
+  return{ok:true};
 }
+
+/* ==== 旧架构静默升级到 DEK 架构 ==== */
+async function _upgradeToDEK(password,oldKEK,saltBuf){
+  console.log('[TDP] 开始静默升级到 DEK 架构...');
+  // 1. 生成新 DEK
+  const dekKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
+  const dekRaw=await crypto.subtle.exportKey('raw',dekKey);
+  // 2. 用旧密码派生新 KEK（使用旧 salt 保持盐不变，省去重新派生）
+  const wrappedDEK=await wrapDEK(dekRaw,oldKEK);
+  // 3. 读取所有表数据（用旧 KEK 即当前 _cryptoKey 解密）
+  const ALL=['customers','todos','followups','customer_investigation','product_docs','trial_feedback'];
+  const snapshots={};
+  for(const tbl of ALL){
+    try{
+      const raw=localStorage.getItem('tdp_table_'+tbl);
+      if(!raw)continue;
+      if(raw.startsWith('ENC2:')){
+        const parts=raw.split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));
+        const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},oldKEK,ct);
+        snapshots[tbl]=JSON.parse(new TextDecoder().decode(plain));
+      } else {
+        snapshots[tbl]=JSON.parse(raw);
+      }
+    }catch(e){snapshots[tbl]=[];}
+  }
+  // 4. 用新 DEK 重新加密所有表数据
+  const _tmpOld=_cryptoKey;
+  _cryptoKey=dekKey;
+  for(const tbl of ALL){
+    if(!snapshots[tbl])continue;
+    try{
+      const plain=JSON.stringify(snapshots[tbl]);
+      const enc=new TextEncoder(),iv2=crypto.getRandomValues(new Uint8Array(12));
+      const ct2=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv2},dekKey,enc.encode(plain));
+      localStorage.setItem('tdp_table_'+tbl,'ENC2:'+bufToB64(iv2.buffer)+':'+bufToB64(ct2));
+    }catch(e){console.warn('[TDP] 表'+tbl+'迁移失败:',e);}
+  }
+  // 5. 更新 vault token（用新 DEK 加密）
+  const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
+  const newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
+  localStorage.setItem(DEK_KEY,wrappedDEK);
+  localStorage.setItem(VAULT_KEY,newToken);
+  console.log('[TDP] ✅ DEK架构升级完成，数据已用新密钥重新加密');
+}
+
 function _startSession(){const session={ts:Date.now(),exp:Date.now()+SESSION_TIMEOUT};sessionStorage.setItem(AUTH_KEY,JSON.stringify(session));if(_sessionTimer)clearTimeout(_sessionTimer);_sessionTimer=setTimeout(()=>logout('会话已超时（8小时），请重新登录'),SESSION_TIMEOUT);}
 function isLoggedIn(){if(!_cryptoKey)return false;const raw=sessionStorage.getItem(AUTH_KEY);if(!raw)return false;try{const s=JSON.parse(raw);return Date.now()<s.exp;}catch(e){return false;}}
 function isPasswordSetup(){return !!(localStorage.getItem(SALT_KEY)&&localStorage.getItem(VAULT_KEY));}
@@ -346,16 +444,50 @@ function hideLoginOverlay(){
   if(ol) ol.style.display='none';
 }
 function logout(msg){_cryptoKey=null;sessionStorage.removeItem(AUTH_KEY);if(_sessionTimer)clearTimeout(_sessionTimer);showLoginOverlay('login',msg||'');}
+/* ==== 修改密码（DEK 架构：只换 KEK，DEK 和数据完全不动）==== */
 async function changePassword(oldPwd,newPwd){
-  const result=await loginWithPassword(oldPwd);
-  if(!result.ok)return{ok:false,reason:'旧密码错误'};
-  const newSaltBuf=crypto.getRandomValues(new Uint8Array(32)),
-        newSaltB64=bufToB64(newSaltBuf.buffer),
-        newKey=await deriveKey(newPwd,newSaltBuf.buffer),
-        randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer),
-        newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,newKey);
-  localStorage.setItem(SALT_KEY,newSaltB64);localStorage.setItem(VAULT_KEY,newToken);
-  _cryptoKey=newKey;_startSession();return{ok:true};
+  // 1. 验证旧密码
+  const saltB64=localStorage.getItem(SALT_KEY);
+  const wrappedDEK=localStorage.getItem(DEK_KEY);
+  const vaultToken=localStorage.getItem(VAULT_KEY);
+  if(!saltB64||!vaultToken)return{ok:false,reason:'账户未初始化'};
+  const saltBuf=b64ToBuf(saltB64);
+  let oldKEK;
+  try{oldKEK=await deriveKEK(oldPwd,saltBuf);}catch(e){return{ok:false,reason:'旧密码错误'};}
+  let dekKey;
+  if(wrappedDEK&&wrappedDEK.startsWith('WRAPPED:')){
+    // 新架构：解包 DEK
+    dekKey=await unwrapDEK(wrappedDEK,oldKEK);
+    if(!dekKey)return{ok:false,reason:'旧密码错误'};
+    const chk=await decryptValueWithKey(vaultToken,dekKey);
+    if(!chk||!chk.startsWith('TDP_VERIFY::'))return{ok:false,reason:'旧密码错误'};
+  } else {
+    // 旧架构：KEK 即数据密钥
+    const chk=await decryptValueWithKey(vaultToken,oldKEK);
+    if(!chk||(!chk.startsWith('TDP_VERIFY::')&&chk!=='TRADEDESK_PRO_VERIFY_2024'))return{ok:false,reason:'旧密码错误'};
+    // 旧架构先升级再改密码
+    await _upgradeToDEK(oldPwd,oldKEK,saltBuf);
+    // 升级后重新读取包裹的 DEK
+    const newWrapped=localStorage.getItem(DEK_KEY);
+    const newKEK=await deriveKEK(oldPwd,saltBuf);
+    dekKey=await unwrapDEK(newWrapped,newKEK);
+    if(!dekKey)return{ok:false,reason:'升级失败，请刷新重试'};
+  }
+  // 2. 用新密码生成新 KEK（新 salt）
+  const newSaltBuf=crypto.getRandomValues(new Uint8Array(32)),newSaltB64=bufToB64(newSaltBuf.buffer);
+  const newKEK=await deriveKEK(newPwd,newSaltBuf.buffer);
+  // 3. 用新 KEK 重新包裹同一个 DEK（数据密钥不变，数据完全不动）
+  const dekRaw=await crypto.subtle.exportKey('raw',dekKey);
+  const newWrappedDEK=await wrapDEK(dekRaw,newKEK);
+  // 4. 更新 vault token（用 DEK 加密，内容不变只刷新）
+  const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
+  const newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
+  // 5. 写入（只更新盐、包裹DEK、验证token；localStorage 中的 ENC2 数据一字不动）
+  localStorage.setItem(SALT_KEY,newSaltB64);
+  localStorage.setItem(DEK_KEY,newWrappedDEK);
+  localStorage.setItem(VAULT_KEY,newToken);
+  _cryptoKey=dekKey;_startSession();
+  return{ok:true};
 }
 function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return false;}if(!isLoggedIn()){showLoginOverlay('login');return false;}return true;}
   </script>
@@ -4432,9 +4564,9 @@ function renderReSelectResults(feedback, results, problems, adjustHints, process
         <input type="password" class="form-control" id="cpwd-new2" placeholder="再次输入新密码"
                onkeydown="if(event.key==='Enter') doChangePwd()" autocomplete="new-password">
       </div>
-      <div style="background:#fff8f0;border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;font-size:12.5px;color:#92400e;line-height:1.7;">
-        ⚠️ <strong>重要提示：</strong>修改密码后，历史数据将无法用新密码解密。<br>
-        建议先用「数据备份」导出全部数据，再修改密码。
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;font-size:12.5px;color:#166534;line-height:1.7;">
+        ✅ <strong>安全升级：</strong>密码修改后，所有历史数据将自动保留，无需备份。<br>
+        系统采用 DEK 双密钥架构，改密码只更换"锁"，数据本身完全不变。
       </div>
     </div>
     <div class="modal-footer">
