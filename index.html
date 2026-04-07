@@ -307,7 +307,7 @@ function b64ToBuf(b64){const bin=atob(b64),buf=new Uint8Array(bin.length);for(le
 // 用密码派生 KEK（密钥加密密钥），KEK 只用于包裹/解包 DEK
 async function deriveKEK(password,saltBuf){
   const enc=new TextEncoder(),baseKey=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:100000,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:210000,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 // 兼容旧代码中可能调用 deriveKey 的地方
 async function deriveKey(password,saltBuf){return deriveKEK(password,saltBuf);}
@@ -350,7 +350,7 @@ async function setupPassword(password){
   localStorage.setItem(SALT_KEY,saltB64);
   localStorage.setItem(DEK_KEY,wrappedDEK);
   localStorage.setItem(VAULT_KEY,verifyToken);
-  localStorage.setItem('tdp_vtoken_prefix','TDP_VERIFY::');
+  // 不再将验证前缀写入 localStorage（常量，不需要持久化）
   _cryptoKey=dekKey;_startSession();return true;
 }
 
@@ -378,12 +378,12 @@ async function loginWithPassword(password){
   // 自动升级到 DEK 架构（在后台静默迁移）
   _cryptoKey=kek; // 先用旧 KEK 让数据可读
   _startSession();
-  _upgradeToDEK(password,kek,saltBuf).catch(e=>console.warn('[TDP] DEK升级失败:',e));
+  _upgradeToDEK(kek,saltBuf).catch(e=>console.warn('[TDP] DEK升级失败:',e));
   return{ok:true};
 }
 
 /* ==== 旧架构静默升级到 DEK 架构 ==== */
-async function _upgradeToDEK(password,oldKEK,saltBuf){
+async function _upgradeToDEK(oldKEK, saltBuf) {
   console.log('[TDP] 开始静默升级到 DEK 架构...');
   // 1. 生成新 DEK
   const dekKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
@@ -466,7 +466,7 @@ async function changePassword(oldPwd,newPwd){
     const chk=await decryptValueWithKey(vaultToken,oldKEK);
     if(!chk||(!chk.startsWith('TDP_VERIFY::')&&chk!=='TRADEDESK_PRO_VERIFY_2024'))return{ok:false,reason:'旧密码错误'};
     // 旧架构先升级再改密码
-    await _upgradeToDEK(oldPwd,oldKEK,saltBuf);
+    await _upgradeToDEK(oldKEK,saltBuf);
     // 升级后重新读取包裹的 DEK
     const newWrapped=localStorage.getItem(DEK_KEY);
     const newKEK=await deriveKEK(oldPwd,saltBuf);
@@ -1517,7 +1517,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
               <div style="font-size:11.5px;color:#6b7280;margin-top:4px;">点击可重新上传</div>
             </div>
           </div>
-          <input type="file" id="doc-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none;" onchange="handleDocFileSelect(this)">
+          <input type="file" id="doc-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp,.svg,.txt,.csv,.zip" style="display:none;" onchange="handleDocFileSelect(this)">
           <!-- 已有链接时显示（编辑模式） -->
           <div id="doc-existing-file" style="display:none;margin-top:8px;padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12.5px;color:#065f46;">
             <i class="fas fa-file-alt"></i> 当前文件：<span id="doc-existing-name" style="font-weight:600;"></span>
@@ -2329,8 +2329,9 @@ async function _saveTableEncrypted(table, rows) {
       const stored = 'ENC2:' + bufToB64(iv.buffer) + ':' + bufToB64(ct);
       localStorage.setItem(_storeKey(table), stored);
     } else {
-      // 未登录时不写入
-      localStorage.setItem(_storeKey(table), JSON.stringify(rows));
+      // _cryptoKey 不存在时禁止写入（防止业务数据以明文落盘）
+      console.warn('[TDP] 未登录状态下禁止写入表:', table);
+      throw new Error('未登录，无法保存数据');
     }
   } catch(e) {
     console.error('[TDP] 存储加密失败:', e);
@@ -2608,6 +2609,16 @@ async function updateBadges() {
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* URL 安全检查：只允许 http:// 和 https:// 协议，防止 javascript: 注入 */
+function safeUrl(url) {
+  if (!url) return '#';
+  const s = String(url).trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^\/\//i.test(s)) return 'https:' + s;
+  // 其他协议（javascript:, data:, vbscript: 等）一律返回 # 并告警
+  return '#';
 }
 
 /* Supabase 双层存储模式：本地 AES-256-GCM + 云端实时同步 */
@@ -3046,7 +3057,7 @@ async function loadDetailInvestigation(customerId) {
       ${inv.annual_purchase ? `<div class="info-item"><div class="info-label">年采购量</div><div class="info-value" style="font-weight:700;">${formatAmount(inv.annual_purchase)}</div></div>` : ''}
       <div class="info-item"><div class="info-label">信用评估</div><div class="info-value">${creditBadge(inv.credit_rating)}</div></div>
       ${inv.main_suppliers ? `<div class="info-item"><div class="info-label">主要供应商</div><div class="info-value">${escHtml(inv.main_suppliers)}</div></div>` : ''}
-      ${inv.website ? `<div class="info-item"><div class="info-label">官网</div><div class="info-value"><a href="${escHtml(inv.website)}" target="_blank" style="color:#1a56db;">${escHtml(inv.website)}</a></div></div>` : ''}
+      ${inv.website ? `<div class="info-item"><div class="info-label">官网</div><div class="info-value"><a href="${safeUrl(inv.website)}" target="_blank" rel="noopener noreferrer" style="color:#1a56db;">${escHtml(inv.website)}</a></div></div>` : ''}
       ${inv.conclusion ? `<div class="info-item"><div class="info-label">结论</div><div class="info-value" style="white-space:pre-wrap;">${escHtml(inv.conclusion)}</div></div>` : ''}
       <div class="info-item"><div class="info-label">背调日期</div><div class="info-value">${formatDate(inv.investigation_date)}</div></div>
     </div>`;
@@ -3260,7 +3271,7 @@ function renderInvestigations(list) {
   if (tableWrapper) tableWrapper.style.display = '';
   emptyEl.style.display = 'none';
   tbody.innerHTML = list.map(inv => `<tr>
-    <td><div style="font-weight:700;color:#111827;cursor:pointer;" onclick="openInvDetail('${inv.id}')">${escHtml(inv.company_name)}</div>${inv.website ? `<a href="${escHtml(inv.website)}" target="_blank" style="font-size:11.5px;color:#1a56db;">${escHtml(inv.website)}</a>` : ''}</td>
+    <td><div style="font-weight:700;color:#111827;cursor:pointer;" onclick="openInvDetail('${inv.id}')">${escHtml(inv.company_name)}</div>${inv.website ? `<a href="${safeUrl(inv.website)}" target="_blank" rel="noopener noreferrer" style="font-size:11.5px;color:#1a56db;">${escHtml(inv.website)}</a>` : ''}</td>
     <td>${inv.country ? `🌍 ${escHtml(inv.country)}` : '-'}</td>
     <td>${escHtml(inv.founded_year) || '-'}</td>
     <td>${escHtml(inv.company_size) || '-'}</td>
@@ -3388,7 +3399,7 @@ function openInvDetail(id) {
       <div class="card" style="padding:16px;">
         <div style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;margin-bottom:10px;">联系方式</div>
         <div class="info-list">
-          ${inv.website ? `<div class="info-item"><div class="info-label">官网</div><div class="info-value"><a href="${escHtml(inv.website)}" target="_blank" style="color:#1a56db;">${escHtml(inv.website)}</a></div></div>` : ''}
+          ${inv.website ? `<div class="info-item"><div class="info-label">官网</div><div class="info-value"><a href="${safeUrl(inv.website)}" target="_blank" rel="noopener noreferrer" style="color:#1a56db;">${escHtml(inv.website)}</a></div></div>` : ''}
           ${inv.social_links ? `<div class="info-item"><div class="info-label">社交媒体</div><div class="info-value">${escHtml(inv.social_links)}</div></div>` : ''}
           ${inv.main_suppliers ? `<div class="info-item"><div class="info-label">主要供应商</div><div class="info-value">${escHtml(inv.main_suppliers)}</div></div>` : ''}
           ${inv.competitors ? `<div class="info-item"><div class="info-label">竞争对手</div><div class="info-value">${escHtml(inv.competitors)}</div></div>` : ''}
@@ -3599,6 +3610,25 @@ function _resetUploadZone() {
 async function handleDocFileSelect(input) {
   const file = input.files[0];
   if (!file) return;
+  // 文件类型白名单（仅允许常见文档格式）
+  const ALLOWED_TYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'image/jpeg','image/png','image/gif','image/webp','image/svg+xml',
+    'text/plain','text/csv',
+    'application/zip','application/x-zip-compressed',
+  ];
+  const ALLOWED_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|jpg|jpeg|png|gif|webp|svg|txt|csv|zip)$/i;
+  if (!ALLOWED_TYPES.includes(file.type) && !ALLOWED_EXT.test(file.name)) {
+    showToast('不支持该文件格式，请上传 PDF、Word、Excel、图片等常见文档', 'warning');
+    input.value = '';
+    return;
+  }
   // 50MB 限制
   if (file.size > 50 * 1024 * 1024) {
     showToast('文件超过 50MB 限制，请压缩后再上传', 'warning');
@@ -3693,7 +3723,17 @@ document.addEventListener('DOMContentLoaded', () => {
   zone.addEventListener('drop', (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) _uploadDocToStorage(file);
+    if (file) {
+      // 同样执行类型检查（复用 input 检查逻辑中的白名单）
+      const ALLOWED_TYPES = ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','image/jpeg','image/png','image/gif','image/webp','image/svg+xml','text/plain','text/csv','application/zip','application/x-zip-compressed'];
+      const ALLOWED_EXT = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|jpg|jpeg|png|gif|webp|svg|txt|csv|zip)$/i;
+      if (!ALLOWED_TYPES.includes(file.type) && !ALLOWED_EXT.test(file.name)) {
+        showToast('不支持该文件格式，请上传 PDF、Word、Excel、图片等常见文档', 'warning');
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) { showToast('文件超过 50MB 限制', 'warning'); return; }
+      _uploadDocToStorage(file);
+    }
   });
 });
 
@@ -4077,8 +4117,8 @@ async function loadRecycleBin() {
         <td style="font-size:12.5px;color:#6b7280;">${deletedAt ? deletedAt.toLocaleString('zh-CN') : '-'}</td>
         <td>${isOld ? `<span style="color:#dc2626;font-size:12px;font-weight:600;">⚠️ ${daysAgo}天前</span>` : `<span style="font-size:12px;color:#9ca3af;">${daysAgo}天前</span>`}</td>
         <td><div class="td-actions">
-          <button class="btn btn-sm btn-success" style="font-size:11.5px;" onclick="doRestore('${r._table}','${r.id}',this)">↩️ 恢复</button>
-          <button class="btn btn-sm btn-danger" style="font-size:11.5px;" onclick="doPermDelete('${r._table}','${r.id}',this)"><i class="fas fa-trash" style="font-size:10px;"></i></button>
+          <button class="btn btn-sm btn-success" style="font-size:11.5px;" data-table="${r._table}" data-id="${r.id}" onclick="doRestore(this.dataset.table,this.dataset.id,this)">↩️ 恢复</button>
+          <button class="btn btn-sm btn-danger" style="font-size:11.5px;" data-table="${r._table}" data-id="${r.id}" onclick="doPermDelete(this.dataset.table,this.dataset.id,this)"><i class="fas fa-trash" style="font-size:10px;"></i></button>
         </div></td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
@@ -4103,10 +4143,12 @@ async function doPermDelete(table, id, btn) {
 async function confirmClearAll() {
   showConfirm('确定清空整个回收站？所有标记删除的数据将被永久清除，无法恢复。', async () => {
     const container = document.getElementById('recycle-list');
+    // 使用 data 属性获取记录（替代解析 onclick 字符串）
     const allItems = [];
-    container.querySelectorAll('tbody tr').forEach(tr => {
-      const restoreBtn = tr.querySelector('.btn-success');
-      if (restoreBtn) { const match = restoreBtn.getAttribute('onclick')?.match(/doRestore\('([^']+)','([^']+)'/); if (match) allItems.push({table:match[1],id:match[2]}); }
+    container.querySelectorAll('button[data-table][data-id]').forEach(btn => {
+      const table = btn.dataset.table;
+      const id    = btn.dataset.id;
+      if (table && id && !allItems.some(x => x.id === id)) allItems.push({ table, id });
     });
     let count = 0;
     for (const item of allItems) { await permanentDelete(item.table, item.id); count++; }
@@ -5057,6 +5099,7 @@ async function doChangePwd() {
   if (!oldPwd)  { showAlert('请输入当前密码','error'); return; }
   if (newPwd1.length < 8) { showAlert('新密码至少需要 8 位','error'); return; }
   if (newPwd1 !== newPwd2) { showAlert('两次新密码不一致','error'); return; }
+  if (typeof tdpGetStrength === 'function' && tdpGetStrength(newPwd1).score < 2) { showAlert('密码强度太弱，请至少包含数字或大写字母','error'); return; }
   const btn = document.getElementById('cpwd-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;display:inline-block;"></span> 处理中...';
