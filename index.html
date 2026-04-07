@@ -3555,7 +3555,8 @@ function deleteDoc(id) {
     try {
       // 同步删除 Supabase Storage 里的文件
       if (doc?.storage_path) {
-        await _sbStorage(`object/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
+        const delPath = doc.storage_path.split('/').map(encodeURIComponent).join('/');
+        await _sbStorage(`object/${_SB_BUCKET}/${delPath}`,
           { method:'DELETE' }).catch(()=>{});
       }
       await apiDelete('product_docs', id);
@@ -3614,7 +3615,9 @@ async function _uploadDocToStorage(file) {
     await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       // 正确路径：/storage/v1/object/{bucket}/{path}
-      xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${encodeURIComponent(storagePath)}`);
+      // storagePath 含斜杠，每段单独编码
+const _encodedUploadPath = storagePath.split('/').map(encodeURIComponent).join('/');
+xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${_encodedUploadPath}`);
       xhr.setRequestHeader('apikey', _SB_KEY);
       xhr.setRequestHeader('Authorization', 'Bearer ' + _SB_KEY);
       xhr.setRequestHeader('x-upsert', 'true');
@@ -3700,16 +3703,22 @@ async function openDocFile(docId) {
   }
 
   // 生成 60 秒有效的签名临时链接
+  // ⚠️ storage_path 含斜杠（如 docs/xxx.pdf），不能整体 encodeURIComponent
+  // 正确做法：每段单独编码，斜杠保持原样
+  const encodedPath = doc.storage_path.split('/').map(encodeURIComponent).join('/');
   showToast('⏳ 正在生成安全链接...', 'info');
   try {
     const res = await _sbStorage(
-      `object/sign/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
+      `object/sign/${_SB_BUCKET}/${encodedPath}`,
       {
         method: 'POST',
         body: JSON.stringify({ expiresIn: 60 }),
       }
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
     const data = await res.json();
     const signedUrl = _SB_URL + data.signedURL;
     window.open(signedUrl, '_blank');
@@ -3724,19 +3733,30 @@ const _SB_FREE_BYTES = 1 * 1024 * 1024 * 1024; // 1 GB 免费额度
 
 async function calcStorageUsage() {
   try {
-    // 列出桶内所有文件（递归）
+    // 列出 docs/ 前缀下所有文件
     const res = await _sbStorage(
       `object/list/${_SB_BUCKET}`,
       {
         method: 'POST',
-        body: JSON.stringify({ prefix: '', limit: 10000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
+        body: JSON.stringify({
+          prefix: 'docs',
+          limit: 10000,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' }
+        }),
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn('[TDP Storage] list 失败:', res.status, await res.text());
+      return null;
+    }
     const files = await res.json();
     if (!Array.isArray(files)) return null;
-    // 累加所有文件大小
-    const totalBytes = files.reduce((sum, f) => sum + (f.metadata?.size || 0), 0);
+    // 过滤掉文件夹占位对象（name 为 .emptyFolderPlaceholder 或 metadata 为 null）
+    const realFiles = files.filter(f => f.metadata && f.name !== '.emptyFolderPlaceholder');
+    // 累加文件大小（metadata.size 单位为字节）
+    const totalBytes = realFiles.reduce((sum, f) => sum + (f.metadata.size || 0), 0);
+    console.log(`[TDP Storage] 共 ${realFiles.length} 个文件，总计 ${totalBytes} 字节`);
     return totalBytes;
   } catch (e) {
     console.warn('[TDP Storage] 空间计算失败:', e.message);
