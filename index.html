@@ -1181,6 +1181,294 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
       <p>点击「添加文档」上传 SDS、TDS、COA 等产品资料</p>
     </div>
   </div>
+
+  <!-- ===== 产品选型页 ===== -->
+  <div class="page-content" id="page-selector">
+    <!-- 步骤指示器 -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-body" style="padding:18px 24px;">
+        <div style="display:flex;align-items:center;justify-content:center;gap:0;overflow-x:auto;padding:4px 0;">
+          <!-- Step 1 -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
+            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#e8f0fe;border:2px solid #1a56db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#1a56db;">1</div>
+            <div style="font-size:11px;font-weight:600;color:#374151;text-align:center;">线材材质</div>
+          </div>
+          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
+          <!-- Step 2 -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
+            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">2</div>
+            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">拉丝机型</div>
+          </div>
+          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
+          <!-- Step 3 -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
+            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">3</div>
+            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">工艺参数</div>
+          </div>
+          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
+          <!-- Step 4 -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
+            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">4</div>
+            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">模具材质</div>
+          </div>
+          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
+          <!-- Step 5 -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
+            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">🎯</div>
+            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">推荐结果</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 1: 线材材质 & 产品类型 -->
+    <div class="selector-step card" id="selector-step-1">
+      <div class="card-header">
+        <div class="card-title">🧵 步骤 1 / 4 — 选择线材材质与产品类型</div>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">线材材质 <span class="required">*</span></label>
+            <select class="form-control" id="sel-wire-material" onchange="onWireMaterialChange()" style="font-size:14px;padding:10px 14px;">
+              <option value="">-- 请选择 --</option>
+              <option value="carbon_steel">⚙️ 碳钢 Carbon Steel</option>
+              <option value="alloy_steel">🔩 合金钢 Alloy Steel</option>
+              <option value="stainless_steel">✨ 不锈钢 Stainless Steel</option>
+              <option value="aluminum">🪶 铝及铝合金 Aluminum</option>
+            </select>
+          </div>
+          <div class="form-group" id="sel-subtype-wrapper" style="display:none;">
+            <label class="form-label">产品类型 <span class="required">*</span></label>
+            <select class="form-control" id="sel-wire-subtype" onchange="onWireSubtypeChange()" style="font-size:14px;padding:10px 14px;">
+              <option value="">-- 请先选择材质 --</option>
+            </select>
+          </div>
+        </div>
+        <!-- 产品类型说明卡片 -->
+        <div id="sel-type-cards" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">💡 碳钢线材产品范围</div>
+            <div style="font-size:12px;color:#6b7280;line-height:1.6;">钢帘线 · 镀锌钢丝 · 光亮钢丝 · 胎圈丝 · 钢丝绳 · 弹簧钢丝</div>
+            <div style="font-size:12px;font-weight:600;color:#1a56db;margin-top:6px;">焊丝细分：</div>
+            <div style="font-size:11.5px;color:#6b7280;line-height:1.6;">实心焊丝 · 药芯焊丝 · 金属粉芯焊丝 · 埋弧焊丝<br>碳钢/低合金/不锈钢/铝合金</div>
+          </div>
+          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">🔬 不锈钢线材</div>
+            <div style="font-size:12px;color:#6b7280;line-height:1.6;">304 · 316L · 430 · 2205 双相<br>医疗/食品/化工/海洋级</div>
+          </div>
+          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">🪶 铝合金线材</div>
+            <div style="font-size:12px;color:#6b7280;line-height:1.6;">铝包钢 (ACS) · 纯铝导体<br>6系结构铝 · 8系导线铝</div>
+          </div>
+        </div>
+        <!-- 焊丝额外子分类 -->
+        <div id="sel-welding-extra" style="display:none;margin-top:16px;"></div>
+      </div>
+      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
+        <button class="btn btn-primary" onclick="nextStep()">下一步：选择拉丝机型 →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: 拉丝机型 -->
+    <div class="selector-step card" id="selector-step-2" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">🏭 步骤 2 / 4 — 选择拉丝机类型</div>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+          <label id="mtype-slip_type" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="slip_type" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('slip_type')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">滑轮式拉丝机 Slip Type</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">多道次同机拉拔，适合中细丝，钢帘线/弹簧丝常用</div>
+              <div class="badge badge-primary" style="margin-top:6px;font-size:10.5px;">中细丝 0.1–3mm</div>
+            </div>
+          </label>
+          <label id="mtype-non_slip" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="non_slip" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('non_slip')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">无滑动式拉丝机 Non-Slip</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">各道次独立控速，高精度，焊丝/不锈钢丝常用</div>
+              <div class="badge badge-success" style="margin-top:6px;font-size:10.5px;">高精度 0.5–5mm</div>
+            </div>
+          </label>
+          <label id="mtype-inverted_capstan" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="inverted_capstan" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('inverted_capstan')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">倒立式拉丝机 Inverted</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">大盘储线，粗中丝，镀锌丝/钢丝绳前道次</div>
+              <div class="badge badge-warning" style="margin-top:6px;font-size:10.5px;">粗中丝 2–10mm</div>
+            </div>
+          </label>
+          <label id="mtype-straight" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="straight" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('straight')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">直线式拉丝机 Straight</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">单道次直进，铝包钢/大线径直进</div>
+              <div class="badge badge-gray" style="margin-top:6px;font-size:10.5px;">粗丝 3–15mm</div>
+            </div>
+          </label>
+          <label id="mtype-bull_block" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="bull_block" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('bull_block')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">大拉机 Bull Block</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">盘条粗拉开坯，出口线径 3–8mm</div>
+              <div class="badge badge-danger" style="margin-top:6px;font-size:10.5px;">粗拉 3–8mm</div>
+            </div>
+          </label>
+          <label id="mtype-fine_drawing" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
+            <input type="radio" name="machine_type" value="fine_drawing" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('fine_drawing')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">水箱拉丝机 Water Box</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:3px;">超细丝湿拉，钢帘线末道次，线径 0.05–0.5mm</div>
+              <div class="badge badge-purple" style="margin-top:6px;font-size:10.5px;">超细丝 0.05–0.5mm</div>
+            </div>
+          </label>
+        </div>
+        <input type="hidden" id="sel-machine-type" value="">
+        <div style="font-size:12px;color:#9ca3af;margin-top:12px;text-align:center;">💡 不确定机型可跳过，直接下一步</div>
+      </div>
+      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
+        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
+        <button class="btn btn-primary" onclick="nextStep()">下一步：工艺参数 →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: 工艺参数 -->
+    <div class="selector-step card" id="selector-step-3" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">⚡ 步骤 3 / 4 — 填写工艺参数</div>
+      </div>
+      <div class="card-body">
+        <div class="form-grid-3">
+          <div class="form-group">
+            <label class="form-label">拉拔速度 (m/s)</label>
+            <input type="number" class="form-control" id="sel-speed" min="0.1" max="50" step="0.5" placeholder="例如：8">
+            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：0.5 – 30 m/s</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">拉拔道次</label>
+            <input type="number" class="form-control" id="sel-passes" min="1" max="40" step="1" placeholder="例如：12">
+            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：1 – 30 道次</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">出口线径 (mm)</label>
+            <input type="number" class="form-control" id="sel-diameter" min="0.05" max="20" step="0.01" placeholder="例如：0.35">
+            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：0.05 – 15 mm</div>
+          </div>
+        </div>
+
+        <!-- 常见工艺快速填入 -->
+        <div style="margin-top:12px;">
+          <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">⚡ 常见工艺快速填入：</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            <button class="btn btn-sm btn-secondary" onclick="fillPreset('steel_cord_fine')">钢帘线末道次</button>
+            <button class="btn btn-sm btn-secondary" onclick="fillPreset('galvanized_rough')">镀锌丝粗拉</button>
+            <button class="btn btn-sm btn-secondary" onclick="fillPreset('spring_mid')">弹簧钢丝中拉</button>
+            <button class="btn btn-sm btn-secondary" onclick="fillPreset('welding_wire')">焊丝拉拔</button>
+            <button class="btn btn-sm btn-secondary" onclick="fillPreset('ss_fine')">不锈钢细拉</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
+        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
+        <button class="btn btn-primary" onclick="nextStep()">下一步：模具材质 →</button>
+      </div>
+    </div>
+
+    <!-- Step 4: 模具材质 -->
+    <div class="selector-step card" id="selector-step-4" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">💎 步骤 4 / 4 — 选择拉丝模具材质</div>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">
+          <label id="dtype-tc" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
+            <input type="radio" name="die_material" value="tc" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('tc')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">💠 硬质合金模 TC</div>
+              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">Tungsten Carbide，最常用，适合大多数线径和材质</div>
+            </div>
+          </label>
+          <label id="dtype-pcd" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
+            <input type="radio" name="die_material" value="pcd" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('pcd')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">💎 PCD 金刚石模</div>
+              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">聚晶金刚石，超细丝/有色金属，超低摩擦系数</div>
+            </div>
+          </label>
+          <label id="dtype-nd" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
+            <input type="radio" name="die_material" value="nd" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('nd')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">🔶 天然金刚石模</div>
+              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">超精密拉拔，线径 &lt; 0.1mm，最高寿命</div>
+            </div>
+          </label>
+          <label id="dtype-ceramic" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
+            <input type="radio" name="die_material" value="ceramic" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('ceramic')">
+            <div>
+              <div style="font-weight:700;font-size:13.5px;">⬜ 陶瓷模</div>
+              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">高耐磨，铝/铜等软金属专用，防粘连</div>
+            </div>
+          </label>
+        </div>
+        <input type="hidden" id="sel-die-material" value="">
+        <div style="font-size:12px;color:#9ca3af;margin-top:12px;text-align:center;">💡 不确定模具材质可跳过</div>
+      </div>
+      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
+        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
+        <button class="btn btn-success btn-lg" onclick="nextStep()">🎯 生成推荐结果</button>
+      </div>
+    </div>
+
+    <!-- Step 5: 推荐结果 -->
+    <div class="selector-step" id="selector-step-5" style="display:none;">
+      <div id="selector-results"></div>
+    </div>
+  </div>
+
+  <!-- ===== 试样反馈页 ===== -->
+  <div class="page-content" id="page-feedback">
+    <div class="card" style="margin-bottom:20px;">
+      <div class="filter-bar">
+        <div class="filter-search">
+          <i class="fas fa-search" style="color:#9ca3af;font-size:12px;"></i>
+          <input type="text" placeholder="搜索客户/产品..." id="feedback-search" oninput="filterFeedbacks()">
+        </div>
+        <select id="feedback-filter-result" onchange="filterFeedbacks()">
+          <option value="">全部结果</option>
+          <option value="失败">❌ 失败</option>
+          <option value="部分通过">⚠️ 部分通过</option>
+          <option value="通过">✅ 通过</option>
+        </select>
+        <select id="feedback-filter-severity" onchange="filterFeedbacks()">
+          <option value="">全部严重程度</option>
+          <option value="致命">🚨 致命</option>
+          <option value="严重">🔴 严重</option>
+          <option value="中等">🟡 中等</option>
+          <option value="轻微">🟢 轻微</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-sm btn-secondary" onclick="exportFeedbacks()"><i class="fas fa-file-excel"></i> 导出反馈</button>
+          <button class="btn btn-sm btn-primary" onclick="openFeedbackModal('','',{})"><i class="fas fa-plus"></i> 手动录入反馈</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div id="feedback-stats" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;"></div>
+
+    <!-- 列表 -->
+    <div id="feedback-list-container">
+      <div class="empty-state">
+        <div class="empty-icon">🔬</div>
+        <h3>暂无试样反馈记录</h3>
+        <p>在「工艺选型」结果页点击「📝 提交试样反馈」，或点击上方「手动录入反馈」</p>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ===== Toast 通知 ===== -->
@@ -1601,293 +1889,6 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
     </div>
   </div>
 </div>
-
-  <!-- ===== 产品选型页 ===== -->
-  <div class="page-content" id="page-selector">
-    <!-- 步骤指示器 -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-body" style="padding:18px 24px;">
-        <div style="display:flex;align-items:center;justify-content:center;gap:0;overflow-x:auto;padding:4px 0;">
-          <!-- Step 1 -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
-            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#e8f0fe;border:2px solid #1a56db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#1a56db;">1</div>
-            <div style="font-size:11px;font-weight:600;color:#374151;text-align:center;">线材材质</div>
-          </div>
-          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
-          <!-- Step 2 -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
-            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">2</div>
-            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">拉丝机型</div>
-          </div>
-          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
-          <!-- Step 3 -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
-            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">3</div>
-            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">工艺参数</div>
-          </div>
-          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
-          <!-- Step 4 -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
-            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">4</div>
-            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">模具材质</div>
-          </div>
-          <div class="sel-step-connector" style="width:50px;height:2px;background:#e5e7eb;margin-bottom:18px;flex-shrink:0;"></div>
-          <!-- Step 5 -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;min-width:80px;">
-            <div class="sel-step-dot" style="width:34px;height:34px;border-radius:50%;background:#f3f4f6;border:2px solid #d1d5db;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#9ca3af;">🎯</div>
-            <div style="font-size:11px;font-weight:600;color:#9ca3af;text-align:center;">推荐结果</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 1: 线材材质 & 产品类型 -->
-    <div class="selector-step card" id="selector-step-1">
-      <div class="card-header">
-        <div class="card-title">🧵 步骤 1 / 4 — 选择线材材质与产品类型</div>
-      </div>
-      <div class="card-body">
-        <div class="form-grid">
-          <div class="form-group">
-            <label class="form-label">线材材质 <span class="required">*</span></label>
-            <select class="form-control" id="sel-wire-material" onchange="onWireMaterialChange()" style="font-size:14px;padding:10px 14px;">
-              <option value="">-- 请选择 --</option>
-              <option value="carbon_steel">⚙️ 碳钢 Carbon Steel</option>
-              <option value="alloy_steel">🔩 合金钢 Alloy Steel</option>
-              <option value="stainless_steel">✨ 不锈钢 Stainless Steel</option>
-              <option value="aluminum">🪶 铝及铝合金 Aluminum</option>
-            </select>
-          </div>
-          <div class="form-group" id="sel-subtype-wrapper" style="display:none;">
-            <label class="form-label">产品类型 <span class="required">*</span></label>
-            <select class="form-control" id="sel-wire-subtype" onchange="onWireSubtypeChange()" style="font-size:14px;padding:10px 14px;">
-              <option value="">-- 请先选择材质 --</option>
-            </select>
-          </div>
-        </div>
-        <!-- 产品类型说明卡片 -->
-        <div id="sel-type-cards" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
-          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
-            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">💡 碳钢线材产品范围</div>
-            <div style="font-size:12px;color:#6b7280;line-height:1.6;">钢帘线 · 镀锌钢丝 · 光亮钢丝 · 胎圈丝 · 钢丝绳 · 弹簧钢丝</div>
-            <div style="font-size:12px;font-weight:600;color:#1a56db;margin-top:6px;">焊丝细分：</div>
-            <div style="font-size:11.5px;color:#6b7280;line-height:1.6;">实心焊丝 · 药芯焊丝 · 金属粉芯焊丝 · 埋弧焊丝<br>碳钢/低合金/不锈钢/铝合金</div>
-          </div>
-          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
-            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">🔬 不锈钢线材</div>
-            <div style="font-size:12px;color:#6b7280;line-height:1.6;">304 · 316L · 430 · 2205 双相<br>医疗/食品/化工/海洋级</div>
-          </div>
-          <div class="card" style="flex:1;min-width:200px;padding:14px;background:#f9fafb;">
-            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">🪶 铝合金线材</div>
-            <div style="font-size:12px;color:#6b7280;line-height:1.6;">铝包钢 (ACS) · 纯铝导体<br>6系结构铝 · 8系导线铝</div>
-          </div>
-        </div>
-        <!-- 焊丝额外子分类 -->
-        <div id="sel-welding-extra" style="display:none;margin-top:16px;"></div>
-      </div>
-      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
-        <button class="btn btn-primary" onclick="nextStep()">下一步：选择拉丝机型 →</button>
-      </div>
-    </div>
-
-    <!-- Step 2: 拉丝机型 -->
-    <div class="selector-step card" id="selector-step-2" style="display:none;">
-      <div class="card-header">
-        <div class="card-title">🏭 步骤 2 / 4 — 选择拉丝机类型</div>
-      </div>
-      <div class="card-body">
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
-          <label id="mtype-slip_type" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="slip_type" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('slip_type')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">滑轮式拉丝机 Slip Type</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">多道次同机拉拔，适合中细丝，钢帘线/弹簧丝常用</div>
-              <div class="badge badge-primary" style="margin-top:6px;font-size:10.5px;">中细丝 0.1–3mm</div>
-            </div>
-          </label>
-          <label id="mtype-non_slip" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="non_slip" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('non_slip')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">无滑动式拉丝机 Non-Slip</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">各道次独立控速，高精度，焊丝/不锈钢丝常用</div>
-              <div class="badge badge-success" style="margin-top:6px;font-size:10.5px;">高精度 0.5–5mm</div>
-            </div>
-          </label>
-          <label id="mtype-inverted_capstan" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="inverted_capstan" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('inverted_capstan')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">倒立式拉丝机 Inverted</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">大盘储线，粗中丝，镀锌丝/钢丝绳前道次</div>
-              <div class="badge badge-warning" style="margin-top:6px;font-size:10.5px;">粗中丝 2–10mm</div>
-            </div>
-          </label>
-          <label id="mtype-straight" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="straight" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('straight')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">直线式拉丝机 Straight</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">单道次直进，铝包钢/大线径直进</div>
-              <div class="badge badge-gray" style="margin-top:6px;font-size:10.5px;">粗丝 3–15mm</div>
-            </div>
-          </label>
-          <label id="mtype-bull_block" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="bull_block" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('bull_block')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">大拉机 Bull Block</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">盘条粗拉开坯，出口线径 3–8mm</div>
-              <div class="badge badge-danger" style="margin-top:6px;font-size:10.5px;">粗拉 3–8mm</div>
-            </div>
-          </label>
-          <label id="mtype-fine_drawing" class="machine-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:12px;align-items:flex-start;">
-            <input type="radio" name="machine_type" value="fine_drawing" style="margin-top:3px;" onchange="document.getElementById('sel-machine-type').value=this.value;highlightMachineCard('fine_drawing')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">水箱拉丝机 Water Box</div>
-              <div style="font-size:12px;color:#6b7280;margin-top:3px;">超细丝湿拉，钢帘线末道次，线径 0.05–0.5mm</div>
-              <div class="badge badge-purple" style="margin-top:6px;font-size:10.5px;">超细丝 0.05–0.5mm</div>
-            </div>
-          </label>
-        </div>
-        <input type="hidden" id="sel-machine-type" value="">
-        <div style="font-size:12px;color:#9ca3af;margin-top:12px;text-align:center;">💡 不确定机型可跳过，直接下一步</div>
-      </div>
-      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
-        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
-        <button class="btn btn-primary" onclick="nextStep()">下一步：工艺参数 →</button>
-      </div>
-    </div>
-
-    <!-- Step 3: 工艺参数 -->
-    <div class="selector-step card" id="selector-step-3" style="display:none;">
-      <div class="card-header">
-        <div class="card-title">⚡ 步骤 3 / 4 — 填写工艺参数</div>
-      </div>
-      <div class="card-body">
-        <div class="form-grid-3">
-          <div class="form-group">
-            <label class="form-label">拉拔速度 (m/s)</label>
-            <input type="number" class="form-control" id="sel-speed" min="0.1" max="50" step="0.5" placeholder="例如：8">
-            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：0.5 – 30 m/s</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">拉拔道次</label>
-            <input type="number" class="form-control" id="sel-passes" min="1" max="40" step="1" placeholder="例如：12">
-            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：1 – 30 道次</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">出口线径 (mm)</label>
-            <input type="number" class="form-control" id="sel-diameter" min="0.05" max="20" step="0.01" placeholder="例如：0.35">
-            <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">常见范围：0.05 – 15 mm</div>
-          </div>
-        </div>
-
-        <!-- 常见工艺快速填入 -->
-        <div style="margin-top:12px;">
-          <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">⚡ 常见工艺快速填入：</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px;">
-            <button class="btn btn-sm btn-secondary" onclick="fillPreset('steel_cord_fine')">钢帘线末道次</button>
-            <button class="btn btn-sm btn-secondary" onclick="fillPreset('galvanized_rough')">镀锌丝粗拉</button>
-            <button class="btn btn-sm btn-secondary" onclick="fillPreset('spring_mid')">弹簧钢丝中拉</button>
-            <button class="btn btn-sm btn-secondary" onclick="fillPreset('welding_wire')">焊丝拉拔</button>
-            <button class="btn btn-sm btn-secondary" onclick="fillPreset('ss_fine')">不锈钢细拉</button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
-        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
-        <button class="btn btn-primary" onclick="nextStep()">下一步：模具材质 →</button>
-      </div>
-    </div>
-
-    <!-- Step 4: 模具材质 -->
-    <div class="selector-step card" id="selector-step-4" style="display:none;">
-      <div class="card-header">
-        <div class="card-title">💎 步骤 4 / 4 — 选择拉丝模具材质</div>
-      </div>
-      <div class="card-body">
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">
-          <label id="dtype-tc" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
-            <input type="radio" name="die_material" value="tc" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('tc')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">💠 硬质合金模 TC</div>
-              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">Tungsten Carbide，最常用，适合大多数线径和材质</div>
-            </div>
-          </label>
-          <label id="dtype-pcd" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
-            <input type="radio" name="die_material" value="pcd" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('pcd')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">💎 PCD 金刚石模</div>
-              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">聚晶金刚石，超细丝/有色金属，超低摩擦系数</div>
-            </div>
-          </label>
-          <label id="dtype-nd" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
-            <input type="radio" name="die_material" value="nd" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('nd')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">🔶 天然金刚石模</div>
-              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">超精密拉拔，线径 &lt; 0.1mm，最高寿命</div>
-            </div>
-          </label>
-          <label id="dtype-ceramic" class="die-card" style="cursor:pointer;border:2px solid #e5e7eb;border-radius:10px;padding:14px;transition:all 0.2s;display:flex;gap:10px;align-items:flex-start;">
-            <input type="radio" name="die_material" value="ceramic" style="margin-top:3px;" onchange="document.getElementById('sel-die-material').value=this.value;highlightDieCard('ceramic')">
-            <div>
-              <div style="font-weight:700;font-size:13.5px;">⬜ 陶瓷模</div>
-              <div style="font-size:11.5px;color:#6b7280;margin-top:3px;">高耐磨，铝/铜等软金属专用，防粘连</div>
-            </div>
-          </label>
-        </div>
-        <input type="hidden" id="sel-die-material" value="">
-        <div style="font-size:12px;color:#9ca3af;margin-top:12px;text-align:center;">💡 不确定模具材质可跳过</div>
-      </div>
-      <div class="modal-footer" style="border-radius:0 0 10px 10px;">
-        <button class="btn btn-secondary" onclick="prevStep()">← 上一步</button>
-        <button class="btn btn-success btn-lg" onclick="nextStep()">🎯 生成推荐结果</button>
-      </div>
-    </div>
-
-    <!-- Step 5: 推荐结果 -->
-    <div class="selector-step" id="selector-step-5" style="display:none;">
-      <div id="selector-results"></div>
-    </div>
-  </div>
-
-  <!-- ===== 试样反馈页 ===== -->
-  <div class="page-content" id="page-feedback">
-    <div class="card" style="margin-bottom:20px;">
-      <div class="filter-bar">
-        <div class="filter-search">
-          <i class="fas fa-search" style="color:#9ca3af;font-size:12px;"></i>
-          <input type="text" placeholder="搜索客户/产品..." id="feedback-search" oninput="filterFeedbacks()">
-        </div>
-        <select id="feedback-filter-result" onchange="filterFeedbacks()">
-          <option value="">全部结果</option>
-          <option value="失败">❌ 失败</option>
-          <option value="部分通过">⚠️ 部分通过</option>
-          <option value="通过">✅ 通过</option>
-        </select>
-        <select id="feedback-filter-severity" onchange="filterFeedbacks()">
-          <option value="">全部严重程度</option>
-          <option value="致命">🚨 致命</option>
-          <option value="严重">🔴 严重</option>
-          <option value="中等">🟡 中等</option>
-          <option value="轻微">🟢 轻微</option>
-        </select>
-        <div style="margin-left:auto;display:flex;gap:8px;">
-          <button class="btn btn-sm btn-secondary" onclick="exportFeedbacks()"><i class="fas fa-file-excel"></i> 导出反馈</button>
-          <button class="btn btn-sm btn-primary" onclick="openFeedbackModal('','',{})"><i class="fas fa-plus"></i> 手动录入反馈</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 统计卡片 -->
-    <div id="feedback-stats" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;"></div>
-
-    <!-- 列表 -->
-    <div id="feedback-list-container">
-      <div class="empty-state">
-        <div class="empty-icon">🔬</div>
-        <h3>暂无试样反馈记录</h3>
-        <p>在「工艺选型」结果页点击「📝 提交试样反馈」，或点击上方「手动录入反馈」</p>
-      </div>
-    </div>
-  </div>
 
 
 <!-- ===== 试样反馈填写模态框 ===== -->
