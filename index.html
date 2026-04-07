@@ -12,7 +12,7 @@
         content="default-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
                  img-src 'self' data: https:;
-                 connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co;
+                 connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co https://nkpnlhlobpnlbayutslm.supabase.co/storage/v1/object https://nkpnlhlobpnlbayutslm.supabase.co/storage/v1/object/sign;
                  font-src 'self';
                  script-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
@@ -1094,7 +1094,25 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
     </div>
     
     <!-- 文档类型统计 -->
-    <div id="doc-type-stats" style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;"></div>
+    <div id="doc-type-stats" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;"></div>
+
+    <!-- Supabase Storage 空间使用情况 -->
+    <div id="storage-usage-bar" style="margin-bottom:16px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      <i class="fas fa-hdd" style="color:#6b7280;font-size:15px;flex-shrink:0;"></i>
+      <div style="flex:1;min-width:180px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+          <span style="font-size:12px;font-weight:600;color:#374151;">Supabase Storage 使用空间</span>
+          <span id="storage-usage-text" style="font-size:12px;color:#6b7280;">计算中...</span>
+        </div>
+        <div style="height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;">
+          <div id="storage-usage-fill" style="height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#1a56db,#3b82f6);transition:width 0.5s;"></div>
+        </div>
+      </div>
+      <span id="storage-usage-pct" style="font-size:13px;font-weight:700;color:#1a56db;min-width:38px;text-align:right;">0%</span>
+      <button onclick="refreshStorageUsage()" title="刷新" style="background:none;border:none;cursor:pointer;color:#9ca3af;padding:2px 4px;font-size:13px;flex-shrink:0;">
+        <i class="fas fa-sync-alt" id="storage-refresh-icon"></i>
+      </button>
+    </div>
 
     <div class="table-wrapper">
       <table id="doc-table">
@@ -1477,12 +1495,41 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
           <input type="text" class="form-control" id="d-title" placeholder="例如：Silicone Rubber 200/1000 Safety Data Sheet v2.1">
         </div>
         <div class="form-group col-span-2">
-          <label class="form-label">文件链接/URL</label>
-          <input type="text" class="form-control" id="d-url" placeholder="https://... 或内网文件路径">
+          <label class="form-label">上传文件 <span style="color:#6b7280;font-weight:400;">（PDF / Word / Excel，最大 50MB）</span></label>
+          <!-- 上传区域 -->
+          <div id="doc-upload-zone" onclick="document.getElementById('doc-file-input').click()"
+               style="border:2px dashed #d1d5db;border-radius:10px;padding:22px 16px;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;background:#fafafa;">
+            <div id="doc-upload-idle">
+              <i class="fas fa-cloud-upload-alt" style="font-size:28px;color:#9ca3af;margin-bottom:8px;display:block;"></i>
+              <div style="font-size:13px;color:#6b7280;">点击选择文件，或将文件拖拽到此处</div>
+              <div style="font-size:11.5px;color:#9ca3af;margin-top:4px;">支持 PDF、Word（.docx）、Excel（.xlsx）</div>
+            </div>
+            <div id="doc-upload-progress" style="display:none;">
+              <i class="fas fa-spinner fa-spin" style="font-size:22px;color:#1a56db;margin-bottom:8px;display:block;"></i>
+              <div style="font-size:13px;color:#1a56db;" id="doc-upload-pct">上传中... 0%</div>
+              <div style="height:6px;background:#e5e7eb;border-radius:3px;margin-top:10px;overflow:hidden;">
+                <div id="doc-upload-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#1a56db,#3b82f6);border-radius:3px;transition:width 0.2s;"></div>
+              </div>
+            </div>
+            <div id="doc-upload-done" style="display:none;">
+              <i class="fas fa-check-circle" style="font-size:22px;color:#059669;margin-bottom:8px;display:block;"></i>
+              <div style="font-size:13px;color:#059669;font-weight:600;" id="doc-upload-done-name"></div>
+              <div style="font-size:11.5px;color:#6b7280;margin-top:4px;">点击可重新上传</div>
+            </div>
+          </div>
+          <input type="file" id="doc-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none;" onchange="handleDocFileSelect(this)">
+          <!-- 已有链接时显示（编辑模式） -->
+          <div id="doc-existing-file" style="display:none;margin-top:8px;padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12.5px;color:#065f46;">
+            <i class="fas fa-file-alt"></i> 当前文件：<span id="doc-existing-name" style="font-weight:600;"></span>
+            <span style="color:#6b7280;margin-left:6px;">（上传新文件将替换）</span>
+          </div>
+          <!-- 隐藏字段存储路径 -->
+          <input type="hidden" id="d-url" />
+          <input type="hidden" id="d-storage-path" />
         </div>
         <div class="form-group">
-          <label class="form-label">文件名称</label>
-          <input type="text" class="form-control" id="d-filename" placeholder="SDS_SR200_v2.1.pdf">
+          <label class="form-label">文件名称 <span style="color:#9ca3af;font-weight:400;">（自动填入）</span></label>
+          <input type="text" class="form-control" id="d-filename" placeholder="上传后自动填入" readonly style="background:#f9fafb;color:#6b7280;">
         </div>
         <div class="form-group">
           <label class="form-label">版本号</label>
@@ -3344,6 +3391,8 @@ async function loadDocs() {
     renderDocs(filteredDocs);
     updateDocCategoryFilter();
     updateDocTypeStats();
+    // 异步刷新存储空间显示（不阻塞主流程）
+    setTimeout(() => refreshStorageUsage(), 800);
   } catch (e) { showToast('加载文档失败: '+e.message.substring(0,100), 'error'); }
 }
 
@@ -3364,13 +3413,13 @@ function renderDocs(list) {
       <td style="font-size:12px;color:#6b7280;">${escHtml(doc.product_code) || '-'}</td>
       <td>${doc.category ? `<span class="badge badge-gray" style="font-size:11px;">${escHtml(doc.category)}</span>` : '-'}</td>
       <td>${docTypeBadge(doc.doc_type)}</td>
-      <td style="max-width:200px;"><div style="font-weight:600;color:#374151;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${doc.file_url ? `<a href="${escHtml(doc.file_url)}" target="_blank" style="color:#1a56db;">📄 ${escHtml(doc.doc_title)}</a>` : escHtml(doc.doc_title)}</div>${doc.file_name ? `<div style="font-size:11px;color:#9ca3af;">${escHtml(doc.file_name)}</div>` : ''}</td>
+      <td style="max-width:200px;"><div style="font-weight:600;color:#374151;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(doc.storage_path||doc.file_url) ? `<a href="#" onclick="openDocFile('${doc.id}');return false;" style="color:#1a56db;">📄 ${escHtml(doc.doc_title)}</a>` : escHtml(doc.doc_title)}</div>${doc.file_name ? `<div style="font-size:11px;color:#9ca3af;">${escHtml(doc.file_name)}</div>` : ''}</td>
       <td style="font-size:12px;">${doc.version ? `<span class="badge badge-gray">${escHtml(doc.version)}</span>` : '-'}</td>
       <td style="font-size:12.5px;">${formatDate(doc.publish_date)}</td>
       <td style="font-size:12.5px;">${expiry ? `<span style="color:${isExpired ? '#dc2626' : isExpiringSoon ? '#d97706' : '#374151'};font-weight:${isExpired || isExpiringSoon ? '700' : '400'};">${isExpired ? '⚠️ 已过期' : isExpiringSoon ? '🔔 即将到期' : formatDate(doc.expiry_date)}</span>` : '-'}</td>
       <td style="max-width:140px;">${doc.tags ? doc.tags.split(',').slice(0,3).map(t => `<span style="background:#f3f4f6;color:#4b5563;font-size:10.5px;padding:2px 7px;border-radius:4px;margin:1px;display:inline-block;">${escHtml(t.trim())}</span>`).join('') : '-'}</td>
       <td><div class="td-actions">
-        ${doc.file_url ? `<a href="${escHtml(doc.file_url)}" target="_blank" class="btn btn-ghost btn-sm" style="color:#059669;"><i class="fas fa-external-link-alt" style="font-size:11px;"></i></a>` : ''}
+        ${(doc.storage_path||doc.file_url) ? `<button class="btn btn-ghost btn-sm" onclick="openDocFile('${doc.id}')" title="打开文件" style="color:#059669;"><i class="fas fa-external-link-alt" style="font-size:11px;"></i></button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="editDoc('${doc.id}')"><i class="fas fa-pen" style="font-size:11px;"></i></button>
         <button class="btn btn-ghost btn-sm" onclick="deleteDoc('${doc.id}')" style="color:#dc2626;"><i class="fas fa-trash" style="font-size:11px;"></i></button>
       </div></td>
@@ -3423,12 +3472,24 @@ function openDocModal(doc = null) {
   document.getElementById('d-type').value = doc?.doc_type || 'SDS';
   document.getElementById('d-title').value = doc?.doc_title || '';
   document.getElementById('d-url').value = doc?.file_url || '';
+  document.getElementById('d-storage-path').value = doc?.storage_path || '';
   document.getElementById('d-filename').value = doc?.file_name || '';
   document.getElementById('d-version').value = doc?.version || '';
   document.getElementById('d-publish').value = doc?.publish_date ? formatDateInput(doc.publish_date) : '';
   document.getElementById('d-expiry').value = doc?.expiry_date ? formatDateInput(doc.expiry_date) : '';
   document.getElementById('d-tags').value = doc?.tags || '';
   document.getElementById('d-notes').value = doc?.notes || '';
+  // 上传区域重置
+  _resetUploadZone();
+  // 编辑模式：显示已有文件名
+  const existingDiv = document.getElementById('doc-existing-file');
+  const existingName = document.getElementById('doc-existing-name');
+  if (doc?.file_name) {
+    existingDiv.style.display = 'block';
+    existingName.textContent = doc.file_name;
+  } else {
+    existingDiv.style.display = 'none';
+  }
   document.getElementById('doc-modal').classList.add('active');
   setTimeout(() => document.getElementById('d-product').focus(), 100);
 }
@@ -3442,13 +3503,19 @@ async function saveDoc() {
   if (!title) { showToast('请输入文档标题', 'warning'); return; }
   const id = document.getElementById('doc-id').value;
   const payload = {
-    product_name: product, product_code: document.getElementById('d-code').value.trim(),
-    category: document.getElementById('d-category').value.trim(), doc_type: document.getElementById('d-type').value,
-    doc_title: title, file_url: document.getElementById('d-url').value.trim(),
-    file_name: document.getElementById('d-filename').value.trim(), version: document.getElementById('d-version').value.trim(),
+    product_name: product,
+    product_code: document.getElementById('d-code').value.trim(),
+    category: document.getElementById('d-category').value.trim(),
+    doc_type: document.getElementById('d-type').value,
+    doc_title: title,
+    file_url: document.getElementById('d-url').value.trim(),
+    storage_path: document.getElementById('d-storage-path').value.trim(),
+    file_name: document.getElementById('d-filename').value.trim(),
+    version: document.getElementById('d-version').value.trim(),
     publish_date: document.getElementById('d-publish').value ? new Date(document.getElementById('d-publish').value).getTime() : null,
     expiry_date: document.getElementById('d-expiry').value ? new Date(document.getElementById('d-expiry').value).getTime() : null,
-    tags: document.getElementById('d-tags').value.trim(), notes: document.getElementById('d-notes').value.trim(),
+    tags: document.getElementById('d-tags').value.trim(),
+    notes: document.getElementById('d-notes').value.trim(),
   };
   try {
     if (id) { await apiPut('product_docs', id, payload); showToast('文档信息已更新', 'success'); }
@@ -3460,9 +3527,247 @@ async function saveDoc() {
 function deleteDoc(id) {
   const doc = allDocs.find(d => d.id === id);
   showConfirm(`确定删除文档「${doc?.doc_title || ''}」吗？`, async () => {
-    try { await apiDelete('product_docs', id); showToast('已删除', 'success'); await loadDocs(); }
-    catch (e) { showToast('删除失败', 'error'); }
+    try {
+      // 同步删除 Supabase Storage 里的文件
+      if (doc?.storage_path) {
+        await _sbFetch(`storage/v1/object/tdp-documents/${encodeURIComponent(doc.storage_path)}`,
+          { method:'DELETE', _prefer:'return=minimal' }).catch(()=>{});
+      }
+      await apiDelete('product_docs', id);
+      showToast('已删除', 'success');
+      await loadDocs();
+    } catch (e) { showToast('删除失败', 'error'); }
   });
+}
+
+/* ========== Supabase Storage 上传 / 临时链接 ========== */
+
+const _SB_BUCKET = 'tdp-documents';
+
+/* 重置上传区域到初始状态 */
+function _resetUploadZone() {
+  document.getElementById('doc-upload-idle').style.display = 'block';
+  document.getElementById('doc-upload-progress').style.display = 'none';
+  document.getElementById('doc-upload-done').style.display = 'none';
+  document.getElementById('doc-upload-bar').style.width = '0%';
+  document.getElementById('doc-upload-pct').textContent = '上传中... 0%';
+  document.getElementById('doc-file-input').value = '';
+  // 上传区拖拽样式重置
+  const zone = document.getElementById('doc-upload-zone');
+  zone.style.borderColor = '#d1d5db';
+  zone.style.background = '#fafafa';
+}
+
+/* 用户选择文件后触发 */
+async function handleDocFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  // 50MB 限制
+  if (file.size > 50 * 1024 * 1024) {
+    showToast('文件超过 50MB 限制，请压缩后再上传', 'warning');
+    input.value = '';
+    return;
+  }
+  await _uploadDocToStorage(file);
+}
+
+/* 上传文件到 Supabase Storage（私有桶）*/
+async function _uploadDocToStorage(file) {
+  const zone = document.getElementById('doc-upload-zone');
+  // 显示进度状态
+  document.getElementById('doc-upload-idle').style.display = 'none';
+  document.getElementById('doc-upload-progress').style.display = 'block';
+  document.getElementById('doc-upload-done').style.display = 'none';
+  zone.style.borderColor = '#1a56db';
+  zone.style.background = '#eff6ff';
+
+  // 生成唯一路径：docs/时间戳_文件名
+  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_\u4e00-\u9fa5]/g, '_');
+  const storagePath = `docs/${Date.now()}_${safeName}`;
+
+  try {
+    // 用 XMLHttpRequest 实现上传进度
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${encodeURIComponent(storagePath)}`);
+      xhr.setRequestHeader('apikey', _SB_KEY);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + _SB_KEY);
+      xhr.setRequestHeader('x-upsert', 'true');
+      // 上传进度
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          document.getElementById('doc-upload-bar').style.width = pct + '%';
+          document.getElementById('doc-upload-pct').textContent = `上传中... ${pct}%`;
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`上传失败 (${xhr.status}): ${xhr.responseText}`));
+      };
+      xhr.onerror = () => reject(new Error('网络错误，上传失败'));
+      xhr.send(file);
+    });
+
+    // 上传成功：填入隐藏字段
+    document.getElementById('d-storage-path').value = storagePath;
+    document.getElementById('d-url').value = ''; // 使用 storage_path，不用直链
+    document.getElementById('d-filename').value = file.name;
+
+    // 如果文档标题为空，自动填入文件名（去掉扩展名）
+    const titleEl = document.getElementById('d-title');
+    if (!titleEl.value.trim()) {
+      titleEl.value = file.name.replace(/\.[^.]+$/, '');
+    }
+
+    // 显示完成状态
+    document.getElementById('doc-upload-progress').style.display = 'none';
+    document.getElementById('doc-upload-done').style.display = 'block';
+    document.getElementById('doc-upload-done-name').textContent = file.name;
+    document.getElementById('doc-existing-file').style.display = 'none';
+    zone.style.borderColor = '#059669';
+    zone.style.background = '#f0fdf4';
+
+    showToast(`✅ 文件上传成功：${file.name}`, 'success');
+
+  } catch (e) {
+    _resetUploadZone();
+    showToast('上传失败：' + e.message, 'error');
+    console.error('[TDP Storage] 上传错误:', e);
+  }
+}
+
+/* 拖拽上传支持 */
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('doc-upload-zone');
+  if (!zone) return;
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.style.borderColor = '#1a56db';
+    zone.style.background = '#eff6ff';
+  });
+  zone.addEventListener('dragleave', () => {
+    zone.style.borderColor = '#d1d5db';
+    zone.style.background = '#fafafa';
+  });
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) _uploadDocToStorage(file);
+  });
+});
+
+/* 生成私有临时链接（60秒有效）并打开 */
+async function openDocFile(docId) {
+  const doc = allDocs.find(d => d.id === docId);
+  if (!doc) return;
+
+  // 优先使用 storage_path（私有文件），fallback 使用 file_url（旧链接）
+  if (!doc.storage_path && !doc.file_url) {
+    showToast('此文档没有关联文件', 'warning');
+    return;
+  }
+
+  if (doc.file_url && !doc.storage_path) {
+    // 旧式外链直接打开
+    window.open(doc.file_url, '_blank');
+    return;
+  }
+
+  // 生成 60 秒有效的签名临时链接
+  showToast('⏳ 正在生成安全链接...', 'info');
+  try {
+    const res = await _sbFetch(
+      `storage/v1/object/sign/${_SB_BUCKET}/${encodeURIComponent(doc.storage_path)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ expiresIn: 60 }),
+        _prefer: 'return=representation'
+      }
+    );
+    if (!res.ok) throw new Error('生成链接失败');
+    const data = await res.json();
+    const signedUrl = _SB_URL + data.signedURL;
+    window.open(signedUrl, '_blank');
+  } catch (e) {
+    showToast('打开失败：' + e.message, 'error');
+    console.error('[TDP Storage] 签名链接错误:', e);
+  }
+}
+
+/* ========== Storage 空间使用量计算 ========== */
+const _SB_FREE_BYTES = 1 * 1024 * 1024 * 1024; // 1 GB 免费额度
+
+async function calcStorageUsage() {
+  try {
+    // 列出桶内所有文件（递归）
+    const res = await _sbFetch(
+      `storage/v1/object/list/${_SB_BUCKET}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ prefix: '', limit: 10000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
+        _prefer: 'return=representation'
+      }
+    );
+    if (!res.ok) return null;
+    const files = await res.json();
+    if (!Array.isArray(files)) return null;
+    // 累加所有文件大小
+    const totalBytes = files.reduce((sum, f) => sum + (f.metadata?.size || 0), 0);
+    return totalBytes;
+  } catch (e) {
+    console.warn('[TDP Storage] 空间计算失败:', e.message);
+    return null;
+  }
+}
+
+function _formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+async function refreshStorageUsage() {
+  const icon = document.getElementById('storage-refresh-icon');
+  const textEl = document.getElementById('storage-usage-text');
+  const fillEl = document.getElementById('storage-usage-fill');
+  const pctEl  = document.getElementById('storage-usage-pct');
+  if (!textEl) return;
+
+  // 转动刷新图标
+  if (icon) icon.classList.add('fa-spin');
+  textEl.textContent = '计算中...';
+
+  const usedBytes = await calcStorageUsage();
+  if (icon) icon.classList.remove('fa-spin');
+
+  if (usedBytes === null) {
+    textEl.textContent = '无法获取（离线）';
+    return;
+  }
+
+  const pct = Math.min(100, (usedBytes / _SB_FREE_BYTES * 100));
+  const pctRound = pct.toFixed(1);
+
+  // 根据使用率设置颜色
+  let color = '#1a56db'; // 蓝色：正常
+  if (pct >= 90) color = '#dc2626';      // 红色：危险
+  else if (pct >= 70) color = '#d97706'; // 橙色：警告
+
+  fillEl.style.width = pct + '%';
+  fillEl.style.background = pct >= 70
+    ? `linear-gradient(90deg, ${color}, ${color}aa)`
+    : 'linear-gradient(90deg,#1a56db,#3b82f6)';
+  pctEl.style.color = color;
+  pctEl.textContent = pctRound + '%';
+  textEl.textContent = `${_formatBytes(usedBytes)} / 1 GB`;
+
+  // 超过 80% 提示升级
+  if (pct >= 80) {
+    showToast(`⚠️ 存储空间已用 ${pctRound}%，建议清理或升级`, 'warning');
+  }
 }
 </script>
 
