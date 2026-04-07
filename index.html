@@ -295,19 +295,24 @@ tr.clickable:hover { background: var(--gray-50); cursor: pointer; }
   <script>
 const AUTH_KEY='tdp_auth_session',VAULT_KEY='tdp_vault',SALT_KEY='tdp_salt',SESSION_TIMEOUT=8*60*60*1000;
 /* ---- DEK 架构 ----
-   tdp_salt   : KEK 派生盐（32字节 Base64）
-   tdp_vault  : 用 KEK 加密后的 DEK（ENC:iv:ct）
-   tdp_dek_raw: 【不存储】DEK 明文仅活在内存 _cryptoKey
+   tdp_salt      : KEK 派生盐（32字节 Base64）
+   tdp_vault     : 用 KEK 加密后的 DEK（ENC:iv:ct）
+   tdp_kdf_iter  : PBKDF2 迭代次数（缺省 100000，升级后变为 210000）
+   tdp_dek_raw   : 【不存储】DEK 明文仅活在内存 _cryptoKey
    改密码只需重新加密 DEK，数据完全不动。
    ---- */
-const DEK_KEY='tdp_dek_wrapped'; // 包裹后的 DEK 存储键
+const DEK_KEY='tdp_dek_wrapped';  // 包裹后的 DEK 存储键
+const KDF_ITER_KEY='tdp_kdf_iter'; // PBKDF2 迭代次数存储键
+const KDF_TARGET=210000;           // 目标迭代次数
 let _cryptoKey=null,_sessionTimer=null;
 function bufToB64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
 function b64ToBuf(b64){const bin=atob(b64),buf=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);return buf.buffer;}
 // 用密码派生 KEK（密钥加密密钥），KEK 只用于包裹/解包 DEK
-async function deriveKEK(password,saltBuf){
+async function deriveKEK(password, saltBuf, iterations) {
+  // iterations 未指定时，从 localStorage 读取（兼容旧 100k 和新 210k）
+  const iters = iterations || parseInt(localStorage.getItem(KDF_ITER_KEY)||'100000');
   const enc=new TextEncoder(),baseKey=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:210000,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:saltBuf,iterations:iters,hash:'SHA-256'},baseKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 // 兼容旧代码中可能调用 deriveKey 的地方
 async function deriveKey(password,saltBuf){return deriveKEK(password,saltBuf);}
@@ -339,18 +344,18 @@ async function setupPassword(password){
   // 1. 生成随机 DEK（32字节，可导出）
   const dekKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
   const dekRaw=await crypto.subtle.exportKey('raw',dekKey);
-  // 2. 用密码派生 KEK，包裹 DEK
+  // 2. 用密码派生 KEK（目标迭代次数），包裹 DEK
   const saltBuf=crypto.getRandomValues(new Uint8Array(32)),saltB64=bufToB64(saltBuf.buffer);
-  const kek=await deriveKEK(password,saltBuf.buffer);
+  const kek=await deriveKEK(password,saltBuf.buffer,KDF_TARGET);
   const wrappedDEK=await wrapDEK(dekRaw,kek);
   // 3. 生成 vault token（用 DEK 加密，证明 DEK 正确）
   const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
   const verifyToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
-  // 4. 持久化
+  // 4. 持久化（记录迭代次数，方便后续升级判断）
   localStorage.setItem(SALT_KEY,saltB64);
   localStorage.setItem(DEK_KEY,wrappedDEK);
   localStorage.setItem(VAULT_KEY,verifyToken);
-  // 不再将验证前缀写入 localStorage（常量，不需要持久化）
+  localStorage.setItem(KDF_ITER_KEY,String(KDF_TARGET));
   _cryptoKey=dekKey;_startSession();return true;
 }
 
@@ -370,12 +375,18 @@ async function loginWithPassword(password){
     // 用 DEK 验证 vault token
     const decrypted=await decryptValueWithKey(vaultToken,dekKey);
     if(!decrypted||!decrypted.startsWith('TDP_VERIFY::'))return{ok:false,reason:'wrong_password'};
-    _cryptoKey=dekKey;_startSession();return{ok:true};
+    _cryptoKey=dekKey;_startSession();
+    // 如果 KDF 迭代次数低于目标值，登录后静默升级
+    const curIter=parseInt(localStorage.getItem(KDF_ITER_KEY)||'100000');
+    if(curIter<KDF_TARGET){
+      _upgradeKDFIter(password,dekKey,saltBuf).catch(e=>console.warn('[TDP] KDF升级失败:',e));
+    }
+    return{ok:true};
   }
   // ---- 旧架构兼容路径：KEK 直接加密数据 ----
   const decrypted=await decryptValueWithKey(vaultToken,kek);
   if(!decrypted||(!decrypted.startsWith('TDP_VERIFY::')&&decrypted!=='TRADEDESK_PRO_VERIFY_2024'))return{ok:false,reason:'wrong_password'};
-  // 自动升级到 DEK 架构（在后台静默迁移）
+  // 自动升级到 DEK 架构（在后台静默迁移），升级时也使用目标迭代次数
   _cryptoKey=kek; // 先用旧 KEK 让数据可读
   _startSession();
   _upgradeToDEK(kek,saltBuf).catch(e=>console.warn('[TDP] DEK升级失败:',e));
@@ -423,7 +434,37 @@ async function _upgradeToDEK(oldKEK, saltBuf) {
   const newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
   localStorage.setItem(DEK_KEY,wrappedDEK);
   localStorage.setItem(VAULT_KEY,newToken);
+  // 升级时同时写入目标迭代次数
+  localStorage.setItem(KDF_ITER_KEY,String(KDF_TARGET));
   console.log('[TDP] ✅ DEK架构升级完成，数据已用新密钥重新加密');
+}
+
+/* ==== 静默升级 PBKDF2 迭代次数（不改数据，只重新包裹 DEK）==== */
+async function _upgradeKDFIter(password, dekKey, saltBuf) {
+  console.log('[TDP] 开始静默升级 KDF 迭代次数至', KDF_TARGET, '...');
+  try {
+    // 1. 用新迭代次数派生新 KEK
+    const newKEK = await deriveKEK(password, saltBuf, KDF_TARGET);
+    // 2. 导出 DEK 原始字节，用新 KEK 重新包裹
+    const dekRaw = await crypto.subtle.exportKey('raw', dekKey);
+    const newWrappedDEK = await wrapDEK(dekRaw, newKEK);
+    // 3. 更新 vault token（内容不变，重新用 DEK 签发）
+    const randHex = bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
+    const newToken = await encryptValueWithKey('TDP_VERIFY::' + randHex, dekKey);
+    // 4. 写入新盐 + 新包裹 DEK + 新迭代次数（数据完全不动）
+    const newSaltBuf = crypto.getRandomValues(new Uint8Array(32));
+    // 用新盐重新派生新 KEK，重新包裹
+    const newSaltB64 = bufToB64(newSaltBuf.buffer);
+    const newKEK2 = await deriveKEK(password, newSaltBuf.buffer, KDF_TARGET);
+    const finalWrapped = await wrapDEK(dekRaw, newKEK2);
+    localStorage.setItem(SALT_KEY, newSaltB64);
+    localStorage.setItem(DEK_KEY, finalWrapped);
+    localStorage.setItem(VAULT_KEY, newToken);
+    localStorage.setItem(KDF_ITER_KEY, String(KDF_TARGET));
+    console.log('[TDP] ✅ KDF 迭代次数升级完成（' + KDF_TARGET + ' 次）');
+  } catch(e) {
+    console.warn('[TDP] KDF升级失败（不影响登录）:', e.message);
+  }
 }
 
 function _startSession(){const session={ts:Date.now(),exp:Date.now()+SESSION_TIMEOUT};sessionStorage.setItem(AUTH_KEY,JSON.stringify(session));if(_sessionTimer)clearTimeout(_sessionTimer);_sessionTimer=setTimeout(()=>logout('会话已超时（8小时），请重新登录'),SESSION_TIMEOUT);}
@@ -473,19 +514,20 @@ async function changePassword(oldPwd,newPwd){
     dekKey=await unwrapDEK(newWrapped,newKEK);
     if(!dekKey)return{ok:false,reason:'升级失败，请刷新重试'};
   }
-  // 2. 用新密码生成新 KEK（新 salt）
+  // 2. 用新密码生成新 KEK（新 salt，始终使用目标迭代次数）
   const newSaltBuf=crypto.getRandomValues(new Uint8Array(32)),newSaltB64=bufToB64(newSaltBuf.buffer);
-  const newKEK=await deriveKEK(newPwd,newSaltBuf.buffer);
+  const newKEK=await deriveKEK(newPwd,newSaltBuf.buffer,KDF_TARGET);
   // 3. 用新 KEK 重新包裹同一个 DEK（数据密钥不变，数据完全不动）
   const dekRaw=await crypto.subtle.exportKey('raw',dekKey);
   const newWrappedDEK=await wrapDEK(dekRaw,newKEK);
   // 4. 更新 vault token（用 DEK 加密，内容不变只刷新）
   const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
   const newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
-  // 5. 写入（只更新盐、包裹DEK、验证token；localStorage 中的 ENC2 数据一字不动）
+  // 5. 写入（只更新盐、包裹DEK、验证token、迭代次数；ENC2 数据一字不动）
   localStorage.setItem(SALT_KEY,newSaltB64);
   localStorage.setItem(DEK_KEY,newWrappedDEK);
   localStorage.setItem(VAULT_KEY,newToken);
+  localStorage.setItem(KDF_ITER_KEY,String(KDF_TARGET));
   _cryptoKey=dekKey;_startSession();
   return{ok:true};
 }
