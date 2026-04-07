@@ -3720,7 +3720,15 @@ async function openDocFile(docId) {
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
     const data = await res.json();
-    const signedUrl = _SB_URL + data.signedURL;
+    // Supabase 不同版本返回的 signedURL 格式不同：
+    // 新版：'/storage/v1/object/sign/...'（已含 /storage/v1）
+    // 旧版：'/object/sign/...'（不含 /storage/v1）
+    // 统一处理：若不含 /storage/v1 则手动补上
+    let rawSigned = data.signedURL || data.signedUrl || '';
+    if (!rawSigned.includes('/storage/v1')) {
+      rawSigned = '/storage/v1' + rawSigned;
+    }
+    const signedUrl = _SB_URL + rawSigned;
     window.open(signedUrl, '_blank');
   } catch (e) {
     showToast('打开失败：' + e.message, 'error');
