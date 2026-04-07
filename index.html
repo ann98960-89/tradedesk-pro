@@ -2436,15 +2436,27 @@ async function _pullFromCloud() {
   if (!await _checkCloud()) return;
   console.log('[TDP] ☁️ 开始从 Supabase 拉取数据...');
   let total = 0;
-  for (const tbl of _ALL_TABLES) {
+  // 先并行拉取所有表的 Supabase 数据（避免串行等待放大竞态窗口）
+  const remoteMap = {};
+  await Promise.all(_ALL_TABLES.map(async (tbl) => {
     try {
       const res = await _sbFetch(`${tbl}?limit=5000&order=updated_at.desc&select=*`);
-      if (!res.ok) continue;
+      if (!res.ok) return;
       const remote = await res.json();
-      if (!Array.isArray(remote) || !remote.length) continue;
-      const local  = await _loadTableDecrypted(tbl);
-      const map    = {};
+      if (Array.isArray(remote) && remote.length) remoteMap[tbl] = remote;
+    } catch(e) { console.warn('[TDP] 拉取表', tbl, '失败:', e.message); }
+  }));
+  // 拉取完成后，逐表与本地最新数据合并（此时本地数据是最终状态）
+  for (const tbl of _ALL_TABLES) {
+    const remote = remoteMap[tbl];
+    if (!remote) continue;
+    try {
+      // 二次读取本地数据（确保合并的是最新本地状态，避免覆盖并发写入的记录）
+      const local = await _loadTableDecrypted(tbl);
+      const map   = {};
+      // 本地数据优先放入 map
       local.forEach(r => { map[r.id] = r; });
+      // 仅当 Supabase 记录比本地更新时才覆盖
       remote.forEach(r => {
         if (!map[r.id] || (r.updated_at||0) > (map[r.id].updated_at||0)) {
           map[r.id] = r;
@@ -2453,7 +2465,7 @@ async function _pullFromCloud() {
       const merged = Object.values(map);
       await _saveTableEncrypted(tbl, merged);
       total += remote.length;
-    } catch(e) { console.warn('[TDP] 拉取表', tbl, '失败:', e.message); }
+    } catch(e) { console.warn('[TDP] 合并表', tbl, '失败:', e.message); }
   }
   console.log(`[TDP] ☁️✅ 云端同步完成，共拉取 ${total} 条`);
   _updateSyncBadge(true);
@@ -5235,9 +5247,19 @@ function _tdpInitPage() {
   setTimeout(async () => {
     if(typeof window._tdpCloudSync==='function') {
       await window._tdpCloudSync();
-      // 云同步完成后重新加载当前页面数据
+      // 云同步完成后刷新当前活跃页面数据（不只是 dashboard）
       if(typeof loadDashboard==='function') loadDashboard();
       if(typeof updateBadges==='function') updateBadges();
+      // 同步当前正在浏览的页面
+      const pageLoaders = {
+        todos: loadTodos, customers: loadCustomers, pipeline: loadPipeline,
+        followup: loadFollowups, investigation: loadInvestigations,
+        products: loadDocs, selector: loadSelector, feedback: loadFeedbackPage
+      };
+      const activePage = typeof currentPage !== 'undefined' ? currentPage : '';
+      if (activePage && activePage !== 'dashboard' && typeof pageLoaders[activePage] === 'function') {
+        pageLoaders[activePage]();
+      }
     }
   }, 1500);
 }
