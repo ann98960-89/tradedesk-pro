@@ -13,7 +13,7 @@
                  https://static.cloudflareinsights.com;
                  img-src 'self' data: https:;
                  connect-src 'self' https://static.cloudflareinsights.com https://nkpnlhlobpnlbayutslm.supabase.co;
-                 font-src 'self';
+                 font-src 'self' data: blob:;
                  script-src 'self' 'unsafe-inline' 'unsafe-eval'
                  https://static.cloudflareinsights.com;
                  style-src 'self' 'unsafe-inline';">
@@ -803,6 +803,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
         <input type="text" placeholder="搜索客户、产品..." id="global-search" oninput="globalSearch(this.value)">
       </div>
       <span id="sync-status-badge" title="Supabase 云同步状态" style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;cursor:default;">⏳ 连接中</span>
+      <button id="force-sync-btn" title="强制全量同步到云端" onclick="window._tdpForcePush()" style="background:#e0f2fe;color:#0369a1;border:none;border-radius:12px;font-size:11px;font-weight:600;padding:2px 10px;cursor:pointer;display:none;">☁️↑ 上传本地数据</button>
       <button class="btn btn-primary btn-sm" id="header-add-btn" onclick="handleHeaderAdd()">
         <i class="fas fa-plus"></i> 新建
       </button>
@@ -2513,6 +2514,17 @@ async function _pullFromCloud() {
   }
   console.log(`[TDP] ☁️✅ 云端同步完成，共拉取 ${total} 条`);
   _updateSyncBadge(true);
+  // 若云端无数据但本地有数据，显示「上传本地数据」按钮提示用户做一次全量推送
+  if (total === 0) {
+    let localTotal = 0;
+    for (const tbl of _ALL_TABLES) {
+      try { const r = await _loadTableDecrypted(tbl); localTotal += r.filter(x=>!x._deleted).length; } catch(e){}
+    }
+    if (localTotal > 0) {
+      const btn = document.getElementById('force-sync-btn');
+      if (btn) btn.style.display = 'inline-block';
+    }
+  }
 }
 
 /* 单条记录推送到 Supabase */
@@ -2664,9 +2676,57 @@ function safeUrl(url) {
   return '#';
 }
 
+/* 全量推送本地数据到 Supabase（首次或重新同步时使用） */
+async function _pushAllToCloud() {
+  if (!await _checkCloud()) { console.warn('[TDP] 云端不可用，跳过全量推送'); return; }
+  console.log('[TDP] 开始全量推送本地数据到 Supabase...');
+  let total = 0;
+  for (const tbl of _ALL_TABLES) {
+    try {
+      const rows = await _loadTableDecrypted(tbl);
+      const active = rows.filter(r => !r._deleted);
+      for (const row of active) {
+        const clean = Object.fromEntries(
+          Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
+        );
+        // 先尝试 PATCH（已存在），失败则 POST（新增）
+        try {
+          const checkRes = await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'GET' });
+          const existing = await checkRes.json();
+          if (existing && existing.length > 0) {
+            await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
+          } else {
+            await _sbFetch(tbl, { method:'POST', body:JSON.stringify(clean), _prefer:'return=minimal' });
+          }
+          total++;
+        } catch(e) { console.warn(`[TDP] 推送 ${tbl}/${row.id} 失败:`, e.message); }
+      }
+    } catch(e) { console.warn(`[TDP] 读取 ${tbl} 失败:`, e.message); }
+  }
+  console.log(`[TDP] ✅ 全量推送完成，共推送 ${total} 条记录`);
+  _updateSyncBadge(true);
+}
+
 /* Supabase 双层存储模式：本地 AES-256-GCM + 云端实时同步 */
 window._tdpCloudSync = async function() {
   await _pullFromCloud();
+};
+
+/* 暴露给控制台，方便手动触发全量推送 */
+window._tdpPushAll = _pushAllToCloud;
+
+/* 按钮触发的全量推送（带 UI 反馈） */
+window._tdpForcePush = async function() {
+  const btn = document.getElementById('force-sync-btn');
+  if (btn) { btn.textContent = '☁️↑ 同步中...'; btn.disabled = true; }
+  try {
+    await _pushAllToCloud();
+    showToast('✅ 全量同步完成！数据已上传到云端', 'success', 4000);
+    if (btn) btn.style.display = 'none';
+  } catch(e) {
+    showToast('❌ 同步失败：' + e.message, 'error', 4000);
+    if (btn) { btn.textContent = '☁️↑ 上传本地数据'; btn.disabled = false; }
+  }
 };
 
 console.log('[TDP] ✅ Supabase 云同步模式 | 本地 AES-256-GCM 加密 + Supabase 云端备份');
