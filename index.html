@@ -2545,7 +2545,7 @@ async function _pushToCloud(action, table, id, data) {
       await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, updated_at:Date.now()}), _prefer:'return=minimal' });
     }
     _updateSyncBadge(true);
-  } catch(e) { console.warn('[TDP] 推送失败（不影响本地）:', e.message); }
+  } catch(e) { console.warn('[TDP] 推送失败（不影响本地）:', e.message, '| table:', table, '| action:', action); }
 }
 
 /* 云同步状态角标 */
@@ -2603,9 +2603,25 @@ async function apiPost(table, data) {
 
 async function apiPut(table, id, data) {
   const rows = await _loadTableDecrypted(table);
-  const idx  = rows.findIndex(r => r.id === id);
+  let idx = rows.findIndex(r => r.id === id);
+  // 本地找不到时（如从 Supabase 直接导入的记录），先从云端拉取补充到本地
+  if (idx === -1) {
+    try {
+      const res = await _sbFetch(`${table}?id=eq.${id}&limit=1`);
+      if (res.ok) {
+        const remote = await res.json();
+        if (remote && remote.length > 0) {
+          const r = remote[0];
+          const localRow = { ...r, gs_project_id: r.gs_project_id || 'local', gs_table_name: table, _deleted: false };
+          rows.push(localRow);
+          await _saveTableEncrypted(table, rows);
+          idx = rows.length - 1;
+        }
+      }
+    } catch(e) { console.warn('[TDP] 拉取远端记录失败:', e.message); }
+  }
   if (idx === -1) throw new Error(`记录不存在: ${id}`);
-  const updated = { ...rows[idx], ...data, id, created_at:rows[idx].created_at, updated_at:Date.now() };
+  const updated = { ...rows[idx], ...data, id, created_at: rows[idx].created_at || Date.now(), updated_at: Date.now() };
   rows[idx] = updated;
   await _saveTableEncrypted(table, rows);
   _pushToCloud('put', table, id, updated).catch(()=>{});
@@ -2614,7 +2630,21 @@ async function apiPut(table, id, data) {
 
 async function apiDelete(table, id, label) {
   const rows = await _loadTableDecrypted(table);
-  const idx  = rows.findIndex(r => r.id === id);
+  let idx = rows.findIndex(r => r.id === id);
+  // 本地找不到时，先从云端拉取补充到本地再软删除
+  if (idx === -1) {
+    try {
+      const res = await _sbFetch(`${table}?id=eq.${id}&limit=1`);
+      if (res.ok) {
+        const remote = await res.json();
+        if (remote && remote.length > 0) {
+          const localRow = { ...remote[0], gs_project_id: remote[0].gs_project_id || 'local', gs_table_name: table, _deleted: false };
+          rows.push(localRow);
+          idx = rows.length - 1;
+        }
+      }
+    } catch(e) { console.warn('[TDP] 拉取远端记录失败:', e.message); }
+  }
   if (idx !== -1) {
     rows[idx]._deleted       = true;
     rows[idx]._deleted_at    = new Date().toISOString();
@@ -3793,6 +3823,12 @@ xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${_encodedUploadPat
       titleEl.value = file.name.replace(/\.[^.]+$/, '');
     }
 
+    // 如果产品名称也为空，自动填入文件名（去掉扩展名）
+    const productEl = document.getElementById('d-product');
+    if (!productEl.value.trim()) {
+      productEl.value = file.name.replace(/\.[^.]+$/, '');
+    }
+
     // 显示完成状态
     document.getElementById('doc-upload-progress').style.display = 'none';
     document.getElementById('doc-upload-done').style.display = 'block';
@@ -3801,12 +3837,50 @@ xhr.open('POST', `${_SB_URL}/storage/v1/object/${_SB_BUCKET}/${_encodedUploadPat
     zone.style.borderColor = '#059669';
     zone.style.background = '#f0fdf4';
 
-    showToast(`✅ 文件上传成功：${file.name}`, 'success');
+    // ✅ 文件上传成功后立即自动保存记录到数据库（不需要用户手动点保存）
+    showToast(`✅ 文件上传成功，正在保存记录...`, 'info', 2000);
+    await _autoSaveDocRecord(storagePath, file.name);
 
   } catch (e) {
     _resetUploadZone();
     showToast('上传失败：' + e.message, 'error');
     console.error('[TDP Storage] 上传错误:', e);
+  }
+}
+
+/* 文件上传成功后自动保存文档记录到数据库 */
+async function _autoSaveDocRecord(storagePath, fileName) {
+  try {
+    const existingId = document.getElementById('doc-id').value;
+    const titleVal   = document.getElementById('d-title').value.trim()   || fileName.replace(/\.[^.]+$/, '');
+    const productVal = document.getElementById('d-product').value.trim() || fileName.replace(/\.[^.]+$/, '');
+    const payload = {
+      product_name:  productVal,
+      product_code:  document.getElementById('d-code').value.trim(),
+      category:      document.getElementById('d-category').value.trim(),
+      doc_type:      document.getElementById('d-type').value || 'SDS',
+      doc_title:     titleVal,
+      file_url:      '',
+      storage_path:  storagePath,
+      file_name:     fileName,
+      version:       document.getElementById('d-version').value.trim(),
+      publish_date:  document.getElementById('d-publish').value ? new Date(document.getElementById('d-publish').value).getTime() : null,
+      expiry_date:   document.getElementById('d-expiry').value  ? new Date(document.getElementById('d-expiry').value).getTime()  : null,
+      tags:          document.getElementById('d-tags').value.trim(),
+      notes:         document.getElementById('d-notes').value.trim(),
+    };
+    if (existingId) {
+      await apiPut('product_docs', existingId, payload);
+    } else {
+      const newDoc = await apiPost('product_docs', payload);
+      document.getElementById('doc-id').value = newDoc.id; // 避免后续手动保存重复创建
+    }
+    closeDocModal();
+    await loadDocs();
+    showToast(`✅ 文件已保存：${fileName}`, 'success');
+  } catch(e) {
+    console.error('[TDP] 自动保存记录失败:', e);
+    showToast('文件已上传，但记录保存失败，请手动点击「保存文档」', 'warning', 5000);
   }
 }
 
