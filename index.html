@@ -2963,7 +2963,10 @@ async function _pullFromCloud() {
       const res = await _sbFetch(`${tbl}?limit=5000&order=updated_at.desc&select=*`);
       if (!res.ok) return;
       const remote = await res.json();
-      if (Array.isArray(remote) && remote.length) remoteMap[tbl] = remote;
+      if (Array.isArray(remote) && remote.length) {
+        // 解密云端数据（字段级 ENC: 密文 → 明文）
+        remoteMap[tbl] = _cryptoKey ? await decryptArray(remote) : remote;
+      }
     } catch(e) { console.warn('[TDP] 拉取表', tbl, '失败:', e.message); }
   }));
   // 拉取完成后，逐表与本地最新数据合并（此时本地数据是最终状态）
@@ -3002,22 +3005,25 @@ async function _pullFromCloud() {
   }
 }
 
-/* 单条记录推送到 Supabase */
+/* 单条记录推送到 Supabase（字段级加密：敏感字段以 ENC: 密文存储在云端）*/
 async function _pushToCloud(action, table, id, data) {
   if (!await _checkCloud()) return;
-  // 过滤掉本地专用字段
-  const clean = Object.fromEntries(
-    Object.entries(data).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
-  );
+  if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过云端推送'); return; }
   try {
-    if (action === 'post') {
-      await _sbFetch(table, { method:'POST', body:JSON.stringify(clean), _prefer:'return=minimal' });
-    } else if (action === 'put') {
-      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
-    } else if (action === 'patch') {
-      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
-    } else if (action === 'delete') {
+    if (action === 'delete') {
       await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, updated_at:Date.now()}), _prefer:'return=minimal' });
+    } else {
+      // 过滤掉本地专用字段，然后加密敏感字段
+      const clean = Object.fromEntries(
+        Object.entries(data).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
+      );
+      const encData = await encryptObject(clean);
+      const body = JSON.stringify(encData);
+      if (action === 'post') {
+        await _sbFetch(table, { method:'POST', body, _prefer:'return=minimal' });
+      } else if (action === 'put' || action === 'patch') {
+        await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body, _prefer:'return=minimal' });
+      }
     }
     _updateSyncBadge(true);
   } catch(e) { console.warn('[TDP] 推送失败（不影响本地）:', e.message, '| table:', table, '| action:', action); }
@@ -3086,7 +3092,8 @@ async function apiPut(table, id, data) {
       if (res.ok) {
         const remote = await res.json();
         if (remote && remote.length > 0) {
-          const r = remote[0];
+          // 解密云端记录
+          const r = _cryptoKey ? await decryptObject(remote[0]) : remote[0];
           const localRow = { ...r, gs_project_id: r.gs_project_id || 'local', gs_table_name: table, _deleted: false };
           rows.push(localRow);
           await _saveTableEncrypted(table, rows);
@@ -3113,7 +3120,9 @@ async function apiDelete(table, id, label) {
       if (res.ok) {
         const remote = await res.json();
         if (remote && remote.length > 0) {
-          const localRow = { ...remote[0], gs_project_id: remote[0].gs_project_id || 'local', gs_table_name: table, _deleted: false };
+          // 解密云端记录
+          const r = _cryptoKey ? await decryptObject(remote[0]) : remote[0];
+          const localRow = { ...r, gs_project_id: r.gs_project_id || 'local', gs_table_name: table, _deleted: false };
           rows.push(localRow);
           idx = rows.length - 1;
         }
@@ -3181,9 +3190,10 @@ function safeUrl(url) {
   return '#';
 }
 
-/* 全量推送本地数据到 Supabase（首次或重新同步时使用） */
+/* 全量推送本地数据到 Supabase（首次或重新同步时使用，字段级加密）*/
 async function _pushAllToCloud() {
   if (!await _checkCloud()) { console.warn('[TDP] 云端不可用，跳过全量推送'); return; }
+  if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过全量推送'); return; }
   console.log('[TDP] 开始全量推送本地数据到 Supabase...');
   let total = 0;
   for (const tbl of _ALL_TABLES) {
@@ -3194,14 +3204,16 @@ async function _pushAllToCloud() {
         const clean = Object.fromEntries(
           Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
         );
-        // 先尝试 PATCH（已存在），失败则 POST（新增）
+        // 加密敏感字段后推送
+        const encData = await encryptObject(clean);
+        const body = JSON.stringify(encData);
         try {
           const checkRes = await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'GET' });
           const existing = await checkRes.json();
           if (existing && existing.length > 0) {
-            await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'PATCH', body:JSON.stringify(clean), _prefer:'return=minimal' });
+            await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'PATCH', body, _prefer:'return=minimal' });
           } else {
-            await _sbFetch(tbl, { method:'POST', body:JSON.stringify(clean), _prefer:'return=minimal' });
+            await _sbFetch(tbl, { method:'POST', body, _prefer:'return=minimal' });
           }
           total++;
         } catch(e) { console.warn(`[TDP] 推送 ${tbl}/${row.id} 失败:`, e.message); }
