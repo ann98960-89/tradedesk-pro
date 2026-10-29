@@ -3026,13 +3026,28 @@ async function _pushToCloud(action, table, id, data) {
       }
     }
     _updateSyncBadge(true);
-  } catch(e) { console.warn('[TDP] 推送失败（不影响本地）:', e.message, '| table:', table, '| action:', action); }
+  } catch(e) {
+    // 表不存在（PGRST205 / 404）—— 提示用户需要在 Supabase 建表
+    const msg = e.message || '';
+    if (/PGRST205|Could not find the table|404/.test(msg)) {
+      console.warn('[TDP] 云端表不存在:', table);
+      _updateSyncBadge('missing', table);
+    } else {
+      console.warn('[TDP] 推送失败（不影响本地）:', e.message, '| table:', table, '| action:', action);
+    }
+  }
 }
 
 /* 云同步状态角标 */
-function _updateSyncBadge(synced) {
+function _updateSyncBadge(synced, missingTable) {
   const el = document.getElementById('sync-status-badge');
   if (!el) return;
+  if (missingTable) {
+    el.innerHTML = '⚠️ 缺表 ' + missingTable;
+    el.style.cssText = 'background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;';
+    el.title = '云端数据库缺少 ' + missingTable + ' 表，请在 Supabase 控制台 Database → Tables 中创建该表';
+    return;
+  }
   if (_sbAvailable === false) {
     el.innerHTML = '⚡ 离线';
     el.style.cssText = 'background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;';
