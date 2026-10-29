@@ -333,7 +333,51 @@ async function unwrapDEK(wrapped,kek){
 }
 async function encryptValue(plainText){if(!_cryptoKey)throw new Error('未登录，无法加密');if(plainText===null||plainText===undefined||plainText==='')return '';const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},_cryptoKey,enc.encode(String(plainText)));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
 async function decryptValue(encText){if(!_cryptoKey)return encText;if(!encText||!String(encText).startsWith('ENC:'))return encText;try{const parts=String(encText).split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},_cryptoKey,ct);return new TextDecoder().decode(plain);}catch(e){return '[解密失败]';}}
-async function encryptObject(obj){if(!obj||typeof obj!=='object')return obj;const result={};for(const[k,v]of Object.entries(obj)){if(['id','gs_project_id','gs_table_name','created_at','updated_at'].includes(k)){result[k]=v;}else if(typeof v==='string'&&v!==''){result[k]=await encryptValue(v);}else{result[k]=v;}}return result;}
+/* 数值型列清单（bigint / double precision）—— 这些列不能存密文字符串，
+   也不能存空字符串（PostgREST 会报 22P02 invalid input syntax for type bigint: ""）。
+   通过对生产库逐列探测得出（2026-10-29）。
+   注意：_deleted_at 是 text 类型（存 ISO 字符串），不在此列。*/
+const _NUMERIC_COLS = new Set([
+  // customers
+  'last_contact_date','next_followup_date','order_amount','last_contact','next_followup',
+  // todos
+  'due_date',
+  // followups
+  'followup_date','next_followup_date','contact_date',
+  // product_docs
+  'publish_date','expiry_date',
+  // quotes
+  'freight','insurance','other_cost','commission','total_amount','total_cost','margin_rate',
+  // orders
+  'amount','paid_amount','balance'
+]);
+/* 始终保持明文的元字段 */
+const _META_COLS = new Set(['id','gs_project_id','gs_table_name','created_at','updated_at','_deleted','_deleted_at','_deleted_label']);
+
+async function encryptObject(obj){if(!obj||typeof obj!=='object')return obj;const result={};for(const[k,v]of Object.entries(obj)){
+  if(_META_COLS.has(k)){result[k]=v;}
+  else if(_NUMERIC_COLS.has(k)){result[k]=(v===''||v===undefined)?null:v;}   // 数值列：不加密，空串→null
+  else if(typeof v==='string'&&v!==''){result[k]=await encryptValue(v);}
+  else{result[k]=v;}
+}return result;}
+
+/* 推送前的字段清洗：把空字符串转成 null，避免 NOT NULL / bigint 列报错。
+   NOT NULL 且允许 null 的列（老表）→ null 安全；
+   NOT NULL 且不允许 null 的列（quotes/orders 的 quote_number/order_number）
+   由 _pushRequiredFields 兜底填值。 */
+function _sanitizeForPush(obj){
+  const out = {};
+  for (const [k,v] of Object.entries(obj)){
+    if (v === '') out[k] = null;
+    else out[k] = v;
+  }
+  return out;
+}
+/* quotes / orders 的必填字段兜底（建表时设了 NOT NULL 且默认值 '' 之外的约束） */
+const _PUSH_REQUIRED = {
+  quotes: { quote_number: 'QT-UNNAMED', customer_name: '未命名客户' },
+  orders: { order_number: 'PO-UNNAMED', customer_name: '未命名客户' }
+};
 async function decryptObject(obj){if(!obj||typeof obj!=='object')return obj;const result={};for(const[k,v]of Object.entries(obj)){if(typeof v==='string'&&v.startsWith('ENC:')){result[k]=await decryptValue(v);}else{result[k]=v;}}return result;}
 async function decryptArray(arr){if(!Array.isArray(arr))return arr;return Promise.all(arr.map(item=>decryptObject(item)));}
 async function encryptValueWithKey(plainText,key){const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(plainText));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
@@ -2895,24 +2939,50 @@ function _genId() {
 
 /* ---------- Supabase REST 工具 ---------- */
 /* 数据库 REST API（/rest/v1/） */
+/* 网络层容错：DNS 抖动 / ERR_NAME_NOT_RESOLVED / 超时 自动指数退避重试 */
+const _SB_MAX_RETRY = 4;
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function _isNetErr(e) {
+  const m = (e && (e.message || e.toString())) || '';
+  return /ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK|Failed to fetch|NetworkError|network error|AbortError|timeout/i.test(m);
+}
+
 async function _sbFetch(path, opts = {}) {
-  const ctrl = new AbortController();
-  const tid  = setTimeout(() => ctrl.abort(), 10000);
-  try {
-    const res = await fetch(_SB_URL + '/rest/v1/' + path, {
-      ...opts,
-      signal: ctrl.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': _SB_KEY,
-        'Authorization': 'Bearer ' + _SB_KEY,
-        'Prefer': opts._prefer || 'return=representation',
-        ...(opts.headers || {})
+  const { _prefer, _retry, ...fetchOpts } = opts;
+  const maxRetry = _retry === undefined ? _SB_MAX_RETRY : _retry;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetry; attempt++) {
+    const ctrl = new AbortController();
+    const tid  = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(_SB_URL + '/rest/v1/' + path, {
+        ...fetchOpts,
+        signal: ctrl.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': _SB_KEY,
+          'Authorization': 'Bearer ' + _SB_KEY,
+          'Prefer': _prefer || 'return=representation',
+          ...(fetchOpts.headers || {})
+        }
+      });
+      clearTimeout(tid);
+      // 5xx 也重试（服务端临时故障）
+      if (res.status >= 500 && attempt < maxRetry) {
+        await _sleep(400 * Math.pow(2, attempt));
+        continue;
       }
-    });
-    clearTimeout(tid);
-    return res;
-  } catch(e) { clearTimeout(tid); throw e; }
+      return res;
+    } catch(e) {
+      clearTimeout(tid);
+      lastErr = e;
+      if (!_isNetErr(e) || attempt >= maxRetry) throw e;
+      // 指数退避 + 抖动：400ms, 800ms, 1600ms, 3200ms
+      await _sleep(400 * Math.pow(2, attempt) + Math.random() * 200);
+    }
+  }
+  throw lastErr;
 }
 
 /* Storage API（/storage/v1/） — 路径与数据库不同，单独封装 */
@@ -3017,12 +3087,32 @@ async function _pushToCloud(action, table, id, data) {
       const clean = Object.fromEntries(
         Object.entries(data).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
       );
-      const encData = await encryptObject(clean);
+      let encData = await encryptObject(clean);
+      // 空字符串 → null（避免 bigint / NOT NULL 列报错）
+      encData = _sanitizeForPush(encData);
+      // 补齐同步必需的元字段（clean 过滤掉了 gs_*）
+      encData.gs_project_id = 'local';
+      encData.gs_table_name = table;
+      // quotes / orders 的 NOT NULL 必填字段兜底
+      const req = _PUSH_REQUIRED[table];
+      if (req) {
+        for (const [k, fallback] of Object.entries(req)) {
+          if (encData[k] === null || encData[k] === undefined || encData[k] === '') {
+            encData[k] = await encryptValue(fallback);
+          }
+        }
+      }
       const body = JSON.stringify(encData);
+      let res;
       if (action === 'post') {
-        await _sbFetch(table, { method:'POST', body, _prefer:'return=minimal' });
+        res = await _sbFetch(`${table}?on_conflict=id`, { method:'POST', body, headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' }, _prefer:'resolution=merge-duplicates,return=minimal' });
       } else if (action === 'put' || action === 'patch') {
-        await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body, _prefer:'return=minimal' });
+        res = await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body, _prefer:'return=minimal' });
+      }
+      // 检查响应状态，失败时抛出（PostgREST 错误在响应体里）
+      if (res && !res.ok) {
+        const t = await res.text().catch(()=> '');
+        throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`);
       }
     }
     _updateSyncBadge(true);
@@ -3205,38 +3295,100 @@ function safeUrl(url) {
   return '#';
 }
 
-/* 全量推送本地数据到 Supabase（首次或重新同步时使用，字段级加密）*/
+/* 全量推送本地数据到 Supabase（首次或重新同步时使用，字段级加密）
+   优化：使用 PostgREST 批量 upsert (POST + on_conflict=id + Prefer: resolution=merge)
+        避免逐条 GET 预检，请求数从 2N 降为 N
+        批量大小 25 条，批次间留 300ms 间隔，避免请求风暴触发 DNS 限流 */
+const _PUSH_BATCH = 25;
+const _PUSH_GAP   = 300;
+
 async function _pushAllToCloud() {
   if (!await _checkCloud()) { console.warn('[TDP] 云端不可用，跳过全量推送'); return; }
   if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过全量推送'); return; }
   console.log('[TDP] 开始全量推送本地数据到 Supabase...');
-  let total = 0;
+  let total = 0, failed = 0;
   for (const tbl of _ALL_TABLES) {
     try {
       const rows = await _loadTableDecrypted(tbl);
       const active = rows.filter(r => !r._deleted);
+      if (!active.length) continue;
+
+      // 逐条加密 → 清洗 → 组批
+      const batch = [];
       for (const row of active) {
         const clean = Object.fromEntries(
           Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
         );
-        // 加密敏感字段后推送
-        const encData = await encryptObject(clean);
-        const body = JSON.stringify(encData);
-        try {
-          const checkRes = await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'GET' });
-          const existing = await checkRes.json();
-          if (existing && existing.length > 0) {
-            await _sbFetch(`${tbl}?id=eq.${row.id}`, { method:'PATCH', body, _prefer:'return=minimal' });
-          } else {
-            await _sbFetch(tbl, { method:'POST', body, _prefer:'return=minimal' });
+        let encData = await encryptObject(clean);
+        // 空字符串 → null（避免 bigint / NOT NULL 列报错）
+        encData = _sanitizeForPush(encData);
+        // 补齐同步必需的元字段（被 clean 过滤掉了 gs_*）
+        encData.gs_project_id = 'local';
+        encData.gs_table_name = tbl;
+        // quotes / orders 的 NOT NULL 必填字段兜底
+        const req = _PUSH_REQUIRED[tbl];
+        if (req) {
+          for (const [k, fallback] of Object.entries(req)) {
+            if (encData[k] === null || encData[k] === undefined || encData[k] === '') {
+              encData[k] = await encryptValue(fallback);
+            }
           }
-          total++;
-        } catch(e) { console.warn(`[TDP] 推送 ${tbl}/${row.id} 失败:`, e.message); }
+        }
+        batch.push(encData);
       }
-    } catch(e) { console.warn(`[TDP] 读取 ${tbl} 失败:`, e.message); }
+
+      // 分批 upsert（批次失败时自动降级为逐条推送，定位并跳过问题记录）
+      for (let i = 0; i < batch.length; i += _PUSH_BATCH) {
+        const chunk = batch.slice(i, i + _PUSH_BATCH);
+        let batchOk = false;
+        try {
+          const res = await _sbFetch(`${tbl}?on_conflict=id`, {
+            method: 'POST',
+            body: JSON.stringify(chunk),
+            headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+            _prefer: 'resolution=merge-duplicates,return=minimal'
+          });
+          if (res.ok) {
+            batchOk = true;
+            total += chunk.length;
+          } else {
+            const t = await res.text().catch(()=> '');
+            console.warn(`[TDP] 批次推送 ${tbl} 失败 (HTTP ${res.status})，降级逐条重试:`, t.slice(0, 200));
+          }
+        } catch(e) {
+          console.warn(`[TDP] 批次推送 ${tbl} 异常，降级逐条重试:`, e.message);
+        }
+
+        // 降级：逐条推送，跳过无法写入的记录
+        if (!batchOk) {
+          for (const one of chunk) {
+            try {
+              const res = await _sbFetch(`${tbl}?on_conflict=id`, {
+                method: 'POST',
+                body: JSON.stringify([one]),
+                headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+                _prefer: 'resolution=merge-duplicates,return=minimal'
+              });
+              if (res.ok) total++;
+              else {
+                failed++;
+                const t = await res.text().catch(()=> '');
+                console.warn(`[TDP] 单条推送失败 ${tbl}/${one.id} (HTTP ${res.status}):`, t.slice(0, 160));
+              }
+            } catch(e) {
+              failed++;
+              console.warn(`[TDP] 单条推送异常 ${tbl}/${one.id}:`, e.message);
+            }
+          }
+        }
+        if (i + _PUSH_BATCH < batch.length) await _sleep(_PUSH_GAP);
+      }
+      console.log(`[TDP] 表 ${tbl}: 已推送 ${active.length} 条`);
+    } catch(e) { console.warn(`[TDP] 读取 ${tbl} 失败:`, e.message); failed++; }
   }
-  console.log(`[TDP] ✅ 全量推送完成，共推送 ${total} 条记录`);
+  console.log(`[TDP] ✅ 全量推送完成，成功 ${total} 条${failed ? `，失败 ${failed} 条` : ''}`);
   _updateSyncBadge(true);
+  return { total, failed };
 }
 
 /* Supabase 双层存储模式：本地 AES-256-GCM + 云端实时同步 */
