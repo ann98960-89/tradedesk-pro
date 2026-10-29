@@ -2929,15 +2929,19 @@ async function _loadTableDecrypted(table) {
   try {
     const raw = localStorage.getItem(_storeKey(table));
     if (!raw) return [];
+    let parsed;
     if (raw.startsWith('ENC2:') && _cryptoKey) {
       const parts = raw.split(':');
       const iv    = new Uint8Array(b64ToBuf(parts[1]));
       const ct    = b64ToBuf(parts.slice(2).join(':'));
       const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv}, _cryptoKey, ct);
-      return JSON.parse(new TextDecoder().decode(plain));
+      parsed = JSON.parse(new TextDecoder().decode(plain));
+    } else {
+      // 兼容旧明文数据（升级路径）
+      parsed = JSON.parse(raw);
     }
-    // 兼容旧明文数据（升级路径）
-    return JSON.parse(raw);
+    // 数据清洗：归一化 priority / status 等枚举字段（云端历史数据可能存英文值）
+    return Array.isArray(parsed) ? parsed.map(r => _normalizeRow(table, r)) : parsed;
   } catch(e) { return []; }
 }
 
@@ -3079,7 +3083,11 @@ async function _pullFromCloud() {
         }
       });
       const merged = Object.values(map);
-      await _saveTableEncrypted(tbl, merged);
+      /* 数据清洗：云端历史数据可能存了英文枚举（high/medium/low、pending/completed），
+         落库前统一归一化为中文标准值。这样本地存储变干净，
+         后续全量推送也会把归一化后的值写回云端，彻底修掉脏数据。 */
+      const cleaned = merged.map(r => _normalizeRow(tbl, r));
+      await _saveTableEncrypted(tbl, cleaned);
       total += remote.length;
     } catch(e) { console.warn('[TDP] 合并表', tbl, '失败:', e.message); }
   }
@@ -3190,7 +3198,47 @@ async function apiGet(table, params = {}) {
   const limit = parseInt(params.limit) || 100;
   const page  = parseInt(params.page)  || 1;
   const paged = result.slice((page-1)*limit, page*limit);
-  return { data: paged, total: result.length, page, limit, table };
+  return { data: paged.map(r => _normalizeRow(table, r)), total: result.length, page, limit, table };
+}
+
+/* 优先级 / 状态归一化：
+   云端历史数据可能存了英文枚举（high/medium/low、pending/completed/in-progress）
+   或带空格的大小写变体，直接用作 groups 的 key 会命中 undefined，
+   导致 renderTodos 抛 "Cannot read properties of undefined (reading 'push')"。
+   这里统一映射到中文标准值，未知值一律降级为 '中' / '待处理'。 */
+const _PRIORITY_ALIAS = {
+  '高':'高','高优先级':'高','high':'高','HIGH':'高','High':'高','urgent':'高','1':'高','p1':'高',
+  '中':'中','中优先级':'中','medium':'中','MEDIUM':'中','Medium':'中','mid':'中','normal':'中','2':'中','p2':'中',
+  '低':'低','低优先级':'低','low':'低','LOW':'低','Low':'低','3':'低','p3':'低',
+};
+const _STATUS_ALIAS = {
+  '待处理':'待处理','pending':'待处理','PENDING':'待处理','todo':'待处理','未开始':'待处理',
+  '进行中':'进行中','in-progress':'进行中','in_progress':'进行中','IN-PROGRESS':'进行中','doing':'进行中','处理中':'进行中',
+  '已完成':'已完成','completed':'已完成','COMPLETED':'已完成','done':'已完成','完成':'已完成',
+};
+function _normPriority(v){
+  if (v === null || v === undefined) return '中';
+  const s = String(v).trim();
+  if (!s) return '中';
+  return _PRIORITY_ALIAS[s] || _PRIORITY_ALIAS[s.toLowerCase()] || '中';
+}
+function _normStatus(v){
+  if (v === null || v === undefined) return '待处理';
+  const s = String(v).trim();
+  if (!s) return '待处理';
+  return _STATUS_ALIAS[s] || _STATUS_ALIAS[s.toLowerCase()] || '待处理';
+}
+
+/* 数据清洗：把云端历史遗留的英文/异常枚举归一化为界面使用的中文标准值。
+   在数据入口统一处理，保证筛选、排序、统计、导出各处都拿到一致数据。 */
+function _normalizeRow(table, row){
+  if (!row || typeof row !== 'object') return row;
+  const r = { ...row };
+  if (table === 'todos' || table === 'orders') {
+    if ('priority' in r) r.priority = _normPriority(r.priority);
+    if ('status'   in r) r.status   = _normStatus(r.status);
+  }
+  return r;
 }
 
 async function apiGetOne(table, id) {
@@ -3513,9 +3561,11 @@ function renderTodos(list) {
   }
   const groups = { '高': [], '中': [], '低': [], '进行中': [], '已完成': [] };
   list.forEach(t => {
-    if (t.status === '已完成') groups['已完成'].push(t);
-    else if (t.status === '进行中') groups['进行中'].push(t);
-    else groups[t.priority || '中'].push(t);
+    const status = _normStatus(t.status);
+    const priority = _normPriority(t.priority);
+    if (status === '已完成') groups['已完成'].push(t);
+    else if (status === '进行中') groups['进行中'].push(t);
+    else groups[priority].push(t);   // priority 已被归一化到 高/中/低 之一，必定存在
   });
   const groupConfig = [
     { key: '高', label: '🔴 高优先级', color: '#fee2e2' },
