@@ -720,6 +720,18 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
       <span>客户背调</span>
     </div>
 
+    <div class="nav-section-label" style="margin-top:8px;">业务管理</div>
+    <div class="nav-item" data-page="quotes" onclick="switchPage('quotes')">
+      <span class="nav-icon">💰</span>
+      <span>报价管理</span>
+      <span class="nav-badge" id="quote-badge" style="display:none;">0</span>
+    </div>
+    <div class="nav-item" data-page="orders" onclick="switchPage('orders')">
+      <span class="nav-icon">📦</span>
+      <span>订单跟踪</span>
+      <span class="nav-badge" id="order-badge" style="display:none;">0</span>
+    </div>
+
     <div class="nav-section-label" style="margin-top:8px;">产品资料</div>
     <div class="nav-item" data-page="products" onclick="switchPage('products')">
       <span class="nav-icon">📁</span>
@@ -842,11 +854,11 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon" style="background:#ede9fe;">📁</div>
+        <div class="stat-icon" style="background:#ede9fe;">💰</div>
         <div class="stat-info">
-          <div class="stat-value" id="dash-doc-count">0</div>
-          <div class="stat-label">产品文档</div>
-          <div class="stat-change" id="dash-doc-types" style="color:#7c3aed;">多类文档</div>
+          <div class="stat-value" id="dash-quote-count">0</div>
+          <div class="stat-label">报价 / 订单</div>
+          <div class="stat-change" id="dash-order-count" style="color:#7c3aed;">0 个订单</div>
         </div>
       </div>
     </div>
@@ -890,6 +902,44 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
       </div>
       <div class="card-body">
         <div id="dash-funnel" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+      </div>
+    </div>
+
+    <!-- 数据可视化图表 -->
+    <div class="dashboard-grid" style="margin-top:20px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">客户来源分布</div>
+        </div>
+        <div class="card-body">
+          <div id="dash-source-chart"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">客户评级分布</div>
+        </div>
+        <div class="card-body">
+          <div id="dash-rating-chart"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <div class="card-header">
+        <div class="card-title">阶段转化率分析</div>
+      </div>
+      <div class="card-body">
+        <div id="dash-conversion-chart"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <div class="card-header">
+        <div class="card-title">近 30 天跟进趋势</div>
+      </div>
+      <div class="card-body">
+        <div id="dash-trend-chart"></div>
       </div>
     </div>
   </div>
@@ -1470,9 +1520,99 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
     </div>
   </div>
 
-</div>
+  <!-- ===== 报价管理页 ===== -->
+  <div class="page-content" id="page-quotes">
+    <div class="card" style="margin-bottom:20px;">
+      <div class="filter-bar">
+        <div class="filter-search">
+          <i class="fas fa-search" style="color:#9ca3af;font-size:12px;"></i>
+          <input type="text" placeholder="搜索报价单号/客户..." id="quote-search" oninput="filterQuotes()">
+        </div>
+        <select id="quote-filter-status" onchange="filterQuotes()">
+          <option value="">全部状态</option>
+          <option value="草稿">草稿</option>
+          <option value="已发送">已发送</option>
+          <option value="已确认">已确认</option>
+          <option value="已拒绝">已拒绝</option>
+          <option value="已过期">已过期</option>
+        </select>
+        <select id="quote-filter-currency" onchange="filterQuotes()">
+          <option value="">全部币种</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="CNY">CNY</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-sm btn-secondary" onclick="exportQuotes()"><i class="fas fa-file-excel"></i> 导出</button>
+          <button class="btn btn-sm btn-primary" onclick="openQuoteModal()"><i class="fas fa-plus"></i> 新建报价</button>
+        </div>
+      </div>
+    </div>
+    <div id="quote-stats-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;"></div>
+    <div class="table-wrapper">
+      <table id="quote-table">
+        <thead>
+          <tr>
+            <th>报价单号</th>
+            <th>客户公司</th>
+            <th>报价日期</th>
+            <th>有效期至</th>
+            <th>币种</th>
+            <th>总金额</th>
+            <th>利润率</th>
+            <th>状态</th>
+            <th>版本</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="quote-tbody"></tbody>
+      </table>
+    </div>
+    <div id="quote-empty" class="empty-state" style="display:none;">
+      <div class="empty-icon">💰</div>
+      <h3>暂无报价单</h3>
+      <p>点击「新建报价」创建您的第一份报价单</p>
+    </div>
+  </div>
 
-<!-- ===== Toast 通知 ===== -->
+  <!-- ===== 订单跟踪页 ===== -->
+  <div class="page-content" id="page-orders">
+    <div class="card" style="margin-bottom:20px;">
+      <div class="filter-bar">
+        <div class="filter-search">
+          <i class="fas fa-search" style="color:#9ca3af;font-size:12px;"></i>
+          <input type="text" placeholder="搜索订单号/客户..." id="order-search" oninput="filterOrders()">
+        </div>
+        <select id="order-filter-status" onchange="filterOrders()">
+          <option value="">全部状态</option>
+          <option value="下单确认">下单确认</option>
+          <option value="生产跟进">生产跟进</option>
+          <option value="出货物流">出货物流</option>
+          <option value="回款完成">回款完成</option>
+        </select>
+        <select id="order-filter-priority" onchange="filterOrders()">
+          <option value="">全部优先级</option>
+          <option value="高">高</option>
+          <option value="中">中</option>
+          <option value="低">低</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-sm btn-secondary" onclick="exportOrders()"><i class="fas fa-file-excel"></i> 导出</button>
+          <button class="btn btn-sm btn-primary" onclick="openOrderModal()"><i class="fas fa-plus"></i> 新建订单</button>
+        </div>
+      </div>
+    </div>
+    <div id="order-stats-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;"></div>
+    <div id="orders-container">
+      <div class="empty-state">
+        <div class="empty-icon">📦</div>
+        <h3>暂无订单</h3>
+        <p>点击「新建订单」开始跟踪您的订单全流程</p>
+      </div>
+    </div>
+  </div>
+
+</div>
 <div id="toast-container"></div>
 
 <!-- ===== 待办模态框 ===== -->
@@ -2045,12 +2185,26 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
           </div>
           <button id="export-btn-investigation" class="btn btn-primary btn-sm" style="width:100%;" onclick="exportToExcel('investigation')">⬇️ 导出客户背调</button>
         </div>
+        <div class="card" style="padding:18px;border:2px solid #e5e7eb;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <span style="font-size:24px;">💰</span>
+            <div><div style="font-weight:700;font-size:14px;">报价管理</div><div style="font-size:12px;color:#6b7280;">报价单号、金额、利润率、状态等</div></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%;" onclick="exportQuotes()">⬇️ 导出报价管理</button>
+        </div>
+        <div class="card" style="padding:18px;border:2px solid #e5e7eb;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <span style="font-size:24px;">📦</span>
+            <div><div style="font-weight:700;font-size:14px;">订单跟踪</div><div style="font-size:12px;color:#6b7280;">订单号、状态、金额、物流等</div></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%;" onclick="exportOrders()">⬇️ 导出订单跟踪</button>
+        </div>
         <div class="card" style="padding:18px;border:2px solid #1a56db;background:linear-gradient(135deg,#e8f0fe,#f0f9ff);">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
             <span style="font-size:24px;">📦</span>
-            <div><div style="font-weight:800;font-size:14px;color:#1a56db;">一键全量导出</div><div style="font-size:12px;color:#3b82f6;">5个工作表，包含全部数据</div></div>
+            <div><div style="font-weight:800;font-size:14px;color:#1a56db;">一键全量导出</div><div style="font-size:12px;color:#3b82f6;">含报价、订单等全部数据</div></div>
           </div>
-          <button id="export-btn-all" class="btn btn-primary btn-sm" style="width:100%;" onclick="exportToExcel('all')">📦 一键全量导出 (5 Sheets)</button>
+          <button id="export-btn-all" class="btn btn-primary btn-sm" style="width:100%;" onclick="exportToExcel('all')">📦 一键全量导出</button>
         </div>
       </div>
       <div style="margin-top:16px;padding:12px 14px;background:#f9fafb;border-radius:8px;font-size:12.5px;color:#6b7280;line-height:1.6;">
@@ -2112,10 +2266,325 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
   </div>
 </div>
 
+<!-- ===== 报价管理模态框 ===== -->
+<div class="modal-overlay" id="quote-modal">
+  <div class="modal modal-lg" style="max-width:900px;">
+    <div class="modal-header">
+      <div class="modal-title" id="quote-modal-title">新建报价单</div>
+      <button class="btn-close" onclick="closeQuoteModal()">x</button>
+    </div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+      <input type="hidden" id="quote-id">
+      <input type="hidden" id="quote-version" value="1">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">报价单号 <span class="required">*</span></label>
+          <input type="text" class="form-control" id="quote-number" placeholder="自动生成" readonly style="background:#f9fafb;">
+        </div>
+        <div class="form-group">
+          <label class="form-label">客户公司 <span class="required">*</span></label>
+          <input type="text" class="form-control" id="quote-customer" placeholder="选择或输入客户" list="customer-datalist">
+        </div>
+        <div class="form-group">
+          <label class="form-label">报价日期</label>
+          <input type="date" class="form-control" id="quote-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">有效期至</label>
+          <input type="date" class="form-control" id="quote-valid-until">
+        </div>
+        <div class="form-group">
+          <label class="form-label">币种</label>
+          <select class="form-control" id="quote-currency">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="CNY">CNY</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">状态</label>
+          <select class="form-control" id="quote-status">
+            <option value="草稿">草稿</option>
+            <option value="已发送">已发送</option>
+            <option value="已确认">已确认</option>
+            <option value="已拒绝">已拒绝</option>
+            <option value="已过期">已过期</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">付款方式</label>
+          <select class="form-control" id="quote-payment-terms">
+            <option value="T/T 30% deposit, 70% before shipment">T/T 30% 预付, 70% 发货前</option>
+            <option value="T/T 100% in advance">T/T 100% 预付</option>
+            <option value="L/C at sight">L/C 即期</option>
+            <option value="D/P at sight">D/P 即期</option>
+            <option value="Net 30">Net 30 天</option>
+            <option value="Net 60">Net 60 天</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">贸易条款</label>
+          <select class="form-control" id="quote-incoterms">
+            <option value="FOB">FOB</option>
+            <option value="CIF">CIF</option>
+            <option value="CFR">CFR</option>
+            <option value="EXW">EXW</option>
+            <option value="DDP">DDP</option>
+            <option value="FCA">FCA</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">交货周期</label>
+          <input type="text" class="form-control" id="quote-delivery" placeholder="例如：30-45 天">
+        </div>
+        <div class="form-group">
+          <label class="form-label">起运港</label>
+          <input type="text" class="form-control" id="quote-origin" placeholder="例如：Shanghai / Ningbo">
+        </div>
+      </div>
+
+      <div style="margin-top:8px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="font-size:13px;font-weight:700;color:#374151;">报价明细</div>
+          <button class="btn btn-sm btn-secondary" onclick="addQuoteItem()"><i class="fas fa-plus"></i> 添加行</button>
+        </div>
+        <div class="table-wrapper">
+          <table style="font-size:12.5px;">
+            <thead>
+              <tr>
+                <th style="min-width:160px;">产品名称</th>
+                <th style="min-width:80px;">规格</th>
+                <th style="width:70px;">数量</th>
+                <th style="width:80px;">单位</th>
+                <th style="width:100px;">单价</th>
+                <th style="width:100px;">成本</th>
+                <th style="width:90px;">小计</th>
+                <th style="width:50px;"></th>
+              </tr>
+            </thead>
+            <tbody id="quote-items-tbody"></tbody>
+            <tfoot>
+              <tr style="background:#f9fafb;font-weight:700;">
+                <td colspan="6" style="text-align:right;padding:10px 14px;">合计：</td>
+                <td id="quote-total" style="font-size:14px;color:#1a56db;font-weight:800;">$0.00</td>
+                <td></td>
+              </tr>
+              <tr style="background:#f0fdf4;font-weight:600;">
+                <td colspan="5" style="text-align:right;padding:8px 14px;color:#059669;">总成本：</td>
+                <td id="quote-total-cost" style="color:#059669;">$0.00</td>
+                <td colspan="2" style="color:#059669;font-size:12px;">利润率：<span id="quote-margin">0%</span></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">运费</label>
+          <input type="number" class="form-control" id="quote-freight" placeholder="0" oninput="calcQuoteTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">保险费</label>
+          <input type="number" class="form-control" id="quote-insurance" placeholder="0" oninput="calcQuoteTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">其他费用</label>
+          <input type="number" class="form-control" id="quote-other-cost" placeholder="0" oninput="calcQuoteTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">佣金 (%)</label>
+          <input type="number" class="form-control" id="quote-commission" placeholder="0" step="0.5" oninput="calcQuoteTotal()">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">备注 / 条款</label>
+        <textarea class="form-control" id="quote-notes" rows="3" placeholder="报价说明、特殊条款、包装要求等..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeQuoteModal()">取消</button>
+      <button class="btn btn-outline" onclick="saveQuote(true)"><i class="fas fa-save"></i> 存为草稿</button>
+      <button class="btn btn-primary" onclick="saveQuote(false)"><i class="fas fa-paper-plane"></i> 保存报价</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 订单跟踪模态框 ===== -->
+<div class="modal-overlay" id="order-modal">
+  <div class="modal modal-lg" style="max-width:860px;">
+    <div class="modal-header">
+      <div class="modal-title" id="order-modal-title">新建订单</div>
+      <button class="btn-close" onclick="closeOrderModal()">x</button>
+    </div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+      <input type="hidden" id="order-id">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">订单号 <span class="required">*</span></label>
+          <input type="text" class="form-control" id="order-number" placeholder="自动生成" readonly style="background:#f9fafb;">
+        </div>
+        <div class="form-group">
+          <label class="form-label">客户公司 <span class="required">*</span></label>
+          <input type="text" class="form-control" id="order-customer" placeholder="选择或输入客户" list="customer-datalist">
+        </div>
+        <div class="form-group">
+          <label class="form-label">关联报价单</label>
+          <input type="text" class="form-control" id="order-quote-ref" placeholder="报价单号（选填）" list="quote-datalist">
+        </div>
+        <div class="form-group">
+          <label class="form-label">订单日期</label>
+          <input type="date" class="form-control" id="order-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">订单状态</label>
+          <select class="form-control" id="order-status">
+            <option value="下单确认">下单确认</option>
+            <option value="生产跟进">生产跟进</option>
+            <option value="出货物流">出货物流</option>
+            <option value="回款完成">回款完成</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">优先级</label>
+          <select class="form-control" id="order-priority">
+            <option value="高">高</option>
+            <option value="中">中</option>
+            <option value="低">低</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">订单金额</label>
+          <input type="number" class="form-control" id="order-amount" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">币种</label>
+          <select class="form-control" id="order-currency">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="CNY">CNY</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">预计交货日</label>
+          <input type="date" class="form-control" id="order-eta">
+        </div>
+        <div class="form-group">
+          <label class="form-label">实际发货日</label>
+          <input type="date" class="form-control" id="order-ship-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">付款方式</label>
+          <select class="form-control" id="order-payment-terms">
+            <option value="T/T 30% deposit, 70% before shipment">T/T 30% 预付, 70% 发货前</option>
+            <option value="T/T 100% in advance">T/T 100% 预付</option>
+            <option value="L/C at sight">L/C 即期</option>
+            <option value="D/P at sight">D/P 即期</option>
+            <option value="Net 30">Net 30 天</option>
+            <option value="Net 60">Net 60 天</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">贸易条款</label>
+          <select class="form-control" id="order-incoterms">
+            <option value="FOB">FOB</option>
+            <option value="CIF">CIF</option>
+            <option value="CFR">CFR</option>
+            <option value="EXW">EXW</option>
+            <option value="DDP">DDP</option>
+            <option value="FCA">FCA</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">已收款</label>
+          <input type="number" class="form-control" id="order-paid" placeholder="0" oninput="updateOrderBalance()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">尾款</label>
+          <input type="text" class="form-control" id="order-balance" readonly style="background:#f9fafb;color:#059669;font-weight:700;">
+        </div>
+      </div>
+
+      <div style="margin-top:8px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;">订单产品明细</div>
+        <div class="table-wrapper">
+          <table style="font-size:12.5px;">
+            <thead>
+              <tr>
+                <th style="min-width:160px;">产品名称</th>
+                <th style="min-width:80px;">规格</th>
+                <th style="width:70px;">数量</th>
+                <th style="width:80px;">单位</th>
+                <th style="width:100px;">单价</th>
+                <th style="width:90px;">小计</th>
+                <th style="width:50px;"></th>
+              </tr>
+            </thead>
+            <tbody id="order-items-tbody"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="addOrderItem()"><i class="fas fa-plus"></i> 添加行</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">物流方式</label>
+          <select class="form-control" id="order-logistics">
+            <option value="海运">海运 Sea Freight</option>
+            <option value="空运">空运 Air Freight</option>
+            <option value="陆运">陆运 Land Transport</option>
+            <option value="快递">快递 Express</option>
+            <option value="铁路">铁路 Rail</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">提单号 / 运单号</label>
+          <input type="text" class="form-control" id="order-tracking" placeholder="B/L No. / Tracking No.">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">生产 / 物流备注</label>
+        <textarea class="form-control" id="order-notes" rows="3" placeholder="生产进度、特殊要求、物流安排等..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeOrderModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveOrder()"><i class="fas fa-save"></i> 保存订单</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 订单详情时间线模态框 ===== -->
+<div class="modal-overlay" id="order-detail-modal">
+  <div class="modal modal-lg" style="max-width:720px;">
+    <div class="modal-header">
+      <div class="modal-title" id="od-title">订单详情</div>
+      <button class="btn-close" onclick="closeOrderDetail()">x</button>
+    </div>
+    <div class="modal-body" id="od-body" style="max-height:70vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- ===== 报价单预览模态框 ===== -->
+<div class="modal-overlay" id="quote-preview-modal">
+  <div class="modal modal-lg" style="max-width:800px;">
+    <div class="modal-header">
+      <div class="modal-title">报价单预览</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-primary" onclick="printQuote()"><i class="fas fa-print"></i> 打印 / PDF</button>
+        <button class="btn-close" onclick="closeQuotePreview()">x</button>
+      </div>
+    </div>
+    <div class="modal-body" id="quote-preview-body" style="max-height:75vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<datalist id="quote-datalist"></datalist>
+
 <script>
-/* ===================================================
-   app.js - 全局公用工具函数 & 导航控制
-   =================================================== */
 
 // ===== 全局状态 =====
 let currentPage = 'dashboard';
@@ -2123,15 +2592,17 @@ let currentDetailCustomerId = null;
 let pendingDeleteFn = null;
 
 const PAGE_TITLES = {
-  dashboard: { title: '工作台总览', sub: '欢迎使用 TradeDesk Pro 外贸工作台 🌐' },
+  dashboard: { title: '工作台总览', sub: '欢迎使用 TradeDesk Pro 外贸工作台' },
   todos:     { title: '每日待办事项', sub: '管理您的日常工作任务' },
   customers: { title: '客户列表', sub: '管理所有外贸客户信息' },
   pipeline:  { title: '销售漏斗', sub: '跟踪客户转化全流程' },
   followup:  { title: '跟进记录', sub: '记录每次客户沟通详情' },
   investigation: { title: '客户背调', sub: '调查客户背景与信用评估' },
+  quotes:    { title: '报价管理', sub: '创建报价单、利润计算、版本管理' },
+  orders:    { title: '订单跟踪', sub: '从下单到回款的全流程追踪' },
   products:  { title: '产品资料数据库', sub: '管理 SDS / TDS / COA / Inspection Report 等文档' },
-  selector:  { title: '拉丝工艺产品选型', sub: '根据生产工艺智能推荐最适合的润滑产品 🧪' },
-  feedback:   { title: '试样反馈 & 改进方案', sub: '收集试样结果，智能驱动产品改进推荐 🔬' },
+  selector:  { title: '拉丝工艺产品选型', sub: '根据生产工艺智能推荐最适合的润滑产品' },
+  feedback:   { title: '试样反馈 & 改进方案', sub: '收集试样结果，智能驱动产品改进推荐' },
 };
 
 const ADD_ACTIONS = {
@@ -2140,6 +2611,8 @@ const ADD_ACTIONS = {
   pipeline:  () => openCustomerModal(),
   followup:  () => openFollowupModal(),
   investigation: () => openInvestigationModal(),
+  quotes:    () => openQuoteModal(),
+  orders:    () => openOrderModal(),
   products:  () => openDocModal(),
   selector:  () => {},
   feedback:  () => openFeedbackModal('', '', {}),
@@ -2166,6 +2639,8 @@ function switchPage(page) {
     pipeline:      loadPipeline,
     followup:      loadFollowups,
     investigation: loadInvestigations,
+    quotes:        loadQuotes,
+    orders:        loadOrders,
     products:      loadDocs,
     selector:      loadSelector,
     feedback:      loadFeedbackPage,
@@ -4055,13 +4530,17 @@ async function refreshStorageUsage() {
 /* dashboard.js */
 async function loadDashboard() {
   try {
-    const [todosData, customersData, docsData, followupsData] = await Promise.all([
+    const [todosData, customersData, docsData, followupsData, quotesData, ordersData] = await Promise.all([
       apiGet('todos', { limit: 500 }), apiGet('customers', { limit: 500 }),
       apiGet('product_docs', { limit: 500 }), apiGet('followups', { limit: 200 }),
+      apiGet('quotes', { limit: 500 }).catch(() => ({data: []})),
+      apiGet('orders', { limit: 500 }).catch(() => ({data: []})),
     ]);
     const todos = todosData.data || [];
     const customers = customersData.data || [];
     const docs = docsData.data || [];
+    const quotes = quotesData.data || [];
+    const orders = ordersData.data || [];
     if (!allCustomers.length) allCustomers = customers;
     const pendingTodos = todos.filter(t => t.status !== '已完成');
     const urgentTodos = pendingTodos.filter(t => t.priority === '高' || isOverdue(formatDateInput(t.due_date)));
@@ -4076,9 +4555,9 @@ async function loadDashboard() {
     const potentialAmount = inProgressCustomers.reduce((sum, c) => sum + (c.order_amount || 0), 0);
     document.getElementById('dash-pipeline-count').textContent = inProgressCustomers.length;
     document.getElementById('dash-pipeline-amount').textContent = '$' + (potentialAmount > 9999 ? (potentialAmount / 1000).toFixed(0) + 'K' : potentialAmount.toLocaleString()) + ' 潜在';
-    document.getElementById('dash-doc-count').textContent = docs.length;
-    const docTypes = [...new Set(docs.map(d => d.doc_type))];
-    document.getElementById('dash-doc-types').textContent = docTypes.slice(0,3).join(' / ') || '暂无文档';
+    document.getElementById('dash-quote-count').textContent = quotes.length;
+    const activeOrders = orders.filter(o => o.status !== '回款完成');
+    document.getElementById('dash-order-count').textContent = activeOrders.length + ' 个订单';
     const dashTodos = pendingTodos.slice(0, 8);
     const dashTodoList = document.getElementById('dash-todos-list');
     if (!dashTodos.length) {
@@ -4122,8 +4601,144 @@ async function loadDashboard() {
         <div style="margin-top:8px;height:4px;background:#f3f4f6;border-radius:2px;"><div style="height:100%;border-radius:2px;background:linear-gradient(90deg,#1a56db,#0891b2);width:${pct}%;transition:width 0.4s;"></div></div>
       </div>`;
     }).join('');
+
+    // ===== 数据可视化图表 =====
+    renderSourceChart(customers);
+    renderRatingChart(customers);
+    renderConversionChart(customers, stageCounts);
+    renderTrendChart(followups);
+
     updateBadges();
   } catch (e) { console.error('Dashboard load error:', e); showToast('加载仪表盘数据失败: '+e.message.substring(0,100), 'error'); }
+}
+
+/* ===== 数据可视化图表（纯 CSS/SVG，无外部依赖）===== */
+
+function renderSourceChart(customers) {
+  const container = document.getElementById('dash-source-chart');
+  if (!container) return;
+  const sourceCounts = {};
+  customers.forEach(c => { const s = c.source || '未知'; sourceCounts[s] = (sourceCounts[s]||0)+1; });
+  const entries = Object.entries(sourceCounts).sort((a,b) => b[1]-a[1]);
+  if (!entries.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px;">暂无数据</div>'; return; }
+  const total = customers.length;
+  const colors = ['#1a56db','#059669','#d97706','#7c3aed','#0891b2','#dc2626','#6b7280','#9333ea'];
+  let cumulative = 0;
+  const segments = entries.map(([src, count], i) => {
+    const pct = (count / total) * 100;
+    const offset = -cumulative;
+    cumulative += pct;
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <div style="width:12px;height:12px;border-radius:3px;background:${colors[i%colors.length]};flex-shrink:0;"></div>
+      <div style="flex:1;font-size:12.5px;color:#374151;font-weight:500;">${escHtml(src)}</div>
+      <div style="font-size:12.5px;font-weight:700;color:#111827;">${count}</div>
+      <div style="font-size:11px;color:#6b7280;min-width:38px;text-align:right;">${pct.toFixed(0)}%</div>
+      <div style="width:80px;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;">
+        <div style="height:100%;background:${colors[i%colors.length]};width:${pct}%;border-radius:4px;transition:width 0.5s;"></div>
+      </div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div>${segments}</div><div style="margin-top:8px;padding-top:8px;border-top:1px solid #f3f4f6;font-size:11.5px;color:#6b7280;">共 ${total} 个客户</div>`;
+}
+
+function renderRatingChart(customers) {
+  const container = document.getElementById('dash-rating-chart');
+  if (!container) return;
+  const ratings = { A: 0, B: 0, C: 0, D: 0 };
+  customers.forEach(c => { if (c.rating && ratings[c.rating] !== undefined) ratings[c.rating]++; });
+  const total = customers.length || 1;
+  const config = [
+    { key:'A', label:'A 级 - 重点客户', color:'#059669', bg:'#d1fae5' },
+    { key:'B', label:'B 级 - 潜力客户', color:'#1a56db', bg:'#e8f0fe' },
+    { key:'C', label:'C 级 - 普通客户', color:'#d97706', bg:'#fef3c7' },
+    { key:'D', label:'D 级 - 观察中', color:'#dc2626', bg:'#fee2e2' },
+  ];
+  const bars = config.map(({key, label, color, bg}) => {
+    const count = ratings[key];
+    const pct = (count / total) * 100;
+    return `<div style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="font-size:12.5px;font-weight:600;color:#374151;">${label}</div>
+        <div style="font-size:13px;font-weight:700;color:${color};">${count} <span style="font-size:11px;color:#6b7280;font-weight:400;">(${pct.toFixed(0)}%)</span></div>
+      </div>
+      <div style="height:24px;background:#f3f4f6;border-radius:6px;overflow:hidden;">
+        <div style="height:100%;background:${color};width:${pct}%;border-radius:6px;transition:width 0.5s;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11px;color:#fff;font-weight:700;">${pct>15?pct.toFixed(0)+'%':''}</div>
+      </div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div>${bars}</div>`;
+}
+
+function renderConversionChart(customers, stageCounts) {
+  const container = document.getElementById('dash-conversion-chart');
+  if (!container) return;
+  const total = customers.length || 1;
+  const stages = STAGE_ORDER;
+  const colors = ['#9ca3af','#1a56db','#7c3aed','#d97706','#f59e0b','#3b82f6','#06b6d4','#059669','#10b981'];
+  const bars = stages.map((stage, i) => {
+    const count = stageCounts[stage] || 0;
+    const pct = (count / total) * 100;
+    const prevCount = i > 0 ? (stageCounts[stages[i-1]] || 0) : count;
+    const convRate = prevCount > 0 ? ((count / prevCount) * 100).toFixed(0) : '100';
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <div style="width:90px;font-size:11.5px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;">${stage}</div>
+      <div style="flex:1;height:22px;background:#f3f4f6;border-radius:4px;overflow:hidden;position:relative;">
+        <div style="height:100%;background:${colors[i]};width:${pct}%;border-radius:4px;transition:width 0.5s;"></div>
+      </div>
+      <div style="min-width:35px;font-size:12px;font-weight:700;color:#111827;text-align:right;">${count}</div>
+      <div style="min-width:45px;font-size:11px;color:#059669;font-weight:600;text-align:right;">${i>0?convRate+'%':'-'}</div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div>${bars}</div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #f3f4f6;display:flex;justify-content:space-between;font-size:11px;color:#6b7280;">
+      <span>各阶段客户数 / 转化率</span>
+      <span>共 ${total} 个客户</span>
+    </div>`;
+}
+
+function renderTrendChart(followups) {
+  const container = document.getElementById('dash-trend-chart');
+  if (!container) return;
+  const days = 30;
+  const today = new Date();
+  const dayMap = {};
+  for (let i = days-1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0,10);
+    dayMap[key] = 0;
+  }
+  followups.forEach(f => {
+    if (f.followup_date) {
+      const d = new Date(f.followup_date);
+      const key = d.toISOString().slice(0,10);
+      if (dayMap[key] !== undefined) dayMap[key]++;
+    }
+  });
+  const values = Object.values(dayMap);
+  const maxVal = Math.max(...values, 1);
+  const entries = Object.entries(dayMap);
+  const barWidth = 100 / days;
+  const bars = entries.map(([date, count]) => {
+    const d = new Date(date);
+    const h = (count / maxVal) * 100;
+    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+    return `<div style="display:inline-block;width:${barWidth}%;height:100%;vertical-align:bottom;position:relative;">
+      <div style="position:absolute;bottom:0;left:1px;right:1px;height:${h}%;background:${isWeekend?'#e5e7eb':'#1a56db'};border-radius:2px 2px 0 0;min-height:${count>0?'2px':'0'};transition:height 0.3s;" title="${date}: ${count} 次跟进"></div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `
+    <div style="display:flex;align-items:flex-end;gap:2px;height:120px;margin-bottom:8px;position:relative;">${bars}</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;">
+      <span>30 天前</span>
+      <span>15 天前</span>
+      <span>今天</span>
+    </div>
+    <div style="margin-top:8px;font-size:11.5px;color:#6b7280;">
+      总跟进次数：${values.reduce((a,b)=>a+b,0)} 次
+      | 日均：${(values.reduce((a,b)=>a+b,0)/days).toFixed(1)} 次
+      | 最高：${maxVal} 次
+    </div>`;
 }
 </script>
 
@@ -4379,7 +4994,7 @@ async function quickBackup() {
 }
 
 async function doFullBackup() {
-  const tables = [{key:'customers',name:'客户列表'},{key:'todos',name:'待办事项'},{key:'followups',name:'跟进记录'},{key:'customer_investigation',name:'客户背调'},{key:'product_docs',name:'产品文档'},{key:'trial_feedback',name:'试样反馈'}];
+  const tables = [{key:'customers',name:'客户列表'},{key:'todos',name:'待办事项'},{key:'followups',name:'跟进记录'},{key:'customer_investigation',name:'客户背调'},{key:'product_docs',name:'产品文档'},{key:'trial_feedback',name:'试样反馈'},{key:'quotes',name:'报价管理'},{key:'orders',name:'订单跟踪'}];
   const backupData = {};
   let totalRows = 0;
   for (const t of tables) {
@@ -5299,7 +5914,725 @@ async function doChangePwd() {
 </script>
 
 <script>
-/* ===== 内嵌登录层 JS（SPA，无页面跳转）===== */
+/* ===================================================
+   quotes.js - 报价管理模块
+   =================================================== */
+let allQuotes = [];
+let filteredQuotes = [];
+
+function generateQuoteNumber() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const rand = Math.floor(Math.random()*900+100);
+  return 'QT-' + y + m + dd + '-' + rand;
+}
+
+async function loadQuotes() {
+  try {
+    const data = await apiGet('quotes', { limit: 500 });
+    allQuotes = data.data || [];
+    filteredQuotes = [...allQuotes];
+    renderQuotes();
+    renderQuoteStats();
+    refreshQuoteDatalist();
+  } catch(e) { showToast('加载报价数据失败', 'error'); }
+}
+
+function renderQuoteStats() {
+  const container = document.getElementById('quote-stats-row');
+  if (!container) return;
+  const total = allQuotes.length;
+  const draft = allQuotes.filter(q=>q.status==='草稿').length;
+  const sent = allQuotes.filter(q=>q.status==='已发送').length;
+  const confirmed = allQuotes.filter(q=>q.status==='已确认').length;
+  const totalAmount = allQuotes.filter(q=>q.status!=='已拒绝'&&q.status!=='已过期').reduce((s,q)=>s+(q.total_amount||0),0);
+  const items = [
+    {icon:'💰',label:'报价总数',value:total,color:'#1a56db',bg:'#e8f0fe'},
+    {icon:'📝',label:'草稿',value:draft,color:'#6b7280',bg:'#f3f4f6'},
+    {icon:'📤',label:'已发送',value:sent,color:'#d97706',bg:'#fef3c7'},
+    {icon:'✅',label:'已确认',value:confirmed,color:'#059669',bg:'#d1fae5'},
+    {icon:'💵',label:'报价总额',value:'$'+(totalAmount>9999?(totalAmount/1000).toFixed(1)+'K':totalAmount.toLocaleString()),color:'#7c3aed',bg:'#ede9fe'},
+  ];
+  container.innerHTML = items.map(item=>`<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:12px;min-width:130px;"><div style="width:40px;height:40px;border-radius:10px;background:${item.bg};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">${item.icon}</div><div><div style="font-size:22px;font-weight:800;color:${item.color};">${item.value}</div><div style="font-size:12px;color:#6b7280;">${item.label}</div></div></div>`).join('');
+}
+
+function renderQuotes() {
+  const tbody = document.getElementById('quote-tbody');
+  const emptyEl = document.getElementById('quote-empty');
+  if (!filteredQuotes.length) {
+    tbody.innerHTML = '';
+    document.querySelector('#page-quotes .table-wrapper').style.display = 'none';
+    emptyEl.style.display = 'block';
+    return;
+  }
+  document.querySelector('#page-quotes .table-wrapper').style.display = '';
+  emptyEl.style.display = 'none';
+  const STATUS_CFG = {'草稿':{cls:'badge-gray',icon:'📝'},'已发送':{cls:'badge-primary',icon:'📤'},'已确认':{cls:'badge-success',icon:'✅'},'已拒绝':{cls:'badge-danger',icon:'❌'},'已过期':{cls:'badge-warning',icon:'⏰'}};
+  tbody.innerHTML = filteredQuotes.map(q => {
+    const sta = STATUS_CFG[q.status] || {cls:'badge-gray',icon:''};
+    const margin = q.total_cost ? (((q.total_amount - q.total_cost) / q.total_amount) * 100).toFixed(1) : '0';
+    const marginColor = parseFloat(margin) >= 20 ? '#059669' : parseFloat(margin) >= 10 ? '#d97706' : '#dc2626';
+    return `<tr>
+      <td><div style="font-weight:700;color:#111827;">${escHtml(q.quote_number)}</div>${q.version>1?`<span style="font-size:11px;color:#6b7280;">v${q.version}</span>`:''}</td>
+      <td style="font-weight:600;">${escHtml(q.customer_name)}</td>
+      <td>${formatDate(q.quote_date)}</td>
+      <td>${q.valid_until?`<span style="color:${isOverdue(formatDateInput(q.valid_until))?'#dc2626':'#374151'};">${formatDate(q.valid_until)}</span>`:'-'}</td>
+      <td>${escHtml(q.currency)||'USD'}</td>
+      <td style="font-weight:700;color:#1a56db;">$${(q.total_amount||0).toLocaleString()}</td>
+      <td style="font-weight:700;color:${marginColor};">${margin}%</td>
+      <td><span class="badge ${sta.cls}">${sta.icon} ${q.status||'草稿'}</span></td>
+      <td>${q.version>1?'v'+q.version:'v1'}</td>
+      <td onclick="event.stopPropagation()">
+        <div class="td-actions">
+          <button class="btn btn-ghost btn-sm" onclick="previewQuote('${q.id}')" title="预览" style="color:#1a56db;"><i class="fas fa-eye" style="font-size:11px;"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="editQuote('${q.id}')" title="编辑"><i class="fas fa-pen" style="font-size:11px;"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="duplicateQuote('${q.id}')" title="复制为新版本" style="color:#7c3aed;"><i class="fas fa-copy" style="font-size:11px;"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="deleteQuote('${q.id}')" title="删除" style="color:#dc2626;"><i class="fas fa-trash" style="font-size:11px;"></i></button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function filterQuotes() {
+  const search = (document.getElementById('quote-search')?.value||'').toLowerCase();
+  const status = document.getElementById('quote-filter-status')?.value||'';
+  const currency = document.getElementById('quote-filter-currency')?.value||'';
+  filteredQuotes = allQuotes.filter(q => {
+    if (search && !q.quote_number?.toLowerCase().includes(search) && !q.customer_name?.toLowerCase().includes(search)) return false;
+    if (status && q.status !== status) return false;
+    if (currency && q.currency !== currency) return false;
+    return true;
+  });
+  renderQuotes();
+}
+
+function openQuoteModal(quote) {
+  const isEdit = !!quote;
+  document.getElementById('quote-modal-title').textContent = isEdit ? '编辑报价单' : '新建报价单';
+  document.getElementById('quote-id').value = quote?.id || '';
+  document.getElementById('quote-version').value = quote?.version || 1;
+  document.getElementById('quote-number').value = quote?.quote_number || generateQuoteNumber();
+  document.getElementById('quote-customer').value = quote?.customer_name || '';
+  document.getElementById('quote-date').value = quote?.quote_date ? formatDateInput(quote.quote_date) : new Date().toISOString().slice(0,10);
+  const validDate = new Date(); validDate.setDate(validDate.getDate()+30);
+  document.getElementById('quote-valid-until').value = quote?.valid_until ? formatDateInput(quote.valid_until) : validDate.toISOString().slice(0,10);
+  document.getElementById('quote-currency').value = quote?.currency || 'USD';
+  document.getElementById('quote-status').value = quote?.status || '草稿';
+  document.getElementById('quote-payment-terms').value = quote?.payment_terms || 'T/T 30% deposit, 70% before shipment';
+  document.getElementById('quote-incoterms').value = quote?.incoterms || 'FOB';
+  document.getElementById('quote-delivery').value = quote?.delivery_time || '';
+  document.getElementById('quote-origin').value = quote?.origin_port || '';
+  document.getElementById('quote-freight').value = quote?.freight || '';
+  document.getElementById('quote-insurance').value = quote?.insurance || '';
+  document.getElementById('quote-other-cost').value = quote?.other_cost || '';
+  document.getElementById('quote-commission').value = quote?.commission_rate || '';
+  document.getElementById('quote-notes').value = quote?.notes || '';
+  const tbody = document.getElementById('quote-items-tbody');
+  tbody.innerHTML = '';
+  if (quote?.items && quote.items.length) {
+    quote.items.forEach(item => addQuoteItem(item));
+  } else {
+    addQuoteItem();
+  }
+  calcQuoteTotal();
+  document.getElementById('quote-modal').classList.add('active');
+}
+
+function closeQuoteModal() {
+  document.getElementById('quote-modal').classList.remove('active');
+}
+
+function addQuoteItem(data) {
+  const tbody = document.getElementById('quote-items-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" class="form-control qitem-name" value="${data?.product_name||''}" placeholder="产品名称" style="font-size:12px;padding:6px 8px;"></td>
+    <td><input type="text" class="form-control qitem-spec" value="${data?.spec||''}" placeholder="规格" style="font-size:12px;padding:6px 8px;"></td>
+    <td><input type="number" class="form-control qitem-qty" value="${data?.quantity||''}" placeholder="0" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
+    <td><select class="form-control qitem-unit" style="font-size:12px;padding:6px 8px;"><option>MT</option><option>KG</option><option>PC</option><option>SET</option><option>ROL</option><option>COIL</option><option>DRUM</option></select></td>
+    <td><input type="number" class="form-control qitem-price" value="${data?.unit_price||''}" placeholder="0.00" step="0.01" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
+    <td><input type="number" class="form-control qitem-cost" value="${data?.unit_cost||''}" placeholder="0.00" step="0.01" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
+    <td class="qitem-subtotal" style="font-weight:700;color:#1a56db;padding:6px 8px;">$0.00</td>
+    <td><button class="btn btn-ghost btn-sm" onclick="this.closest('tr').remove();calcQuoteTotal();" style="color:#dc2626;padding:2px;"><i class="fas fa-times" style="font-size:11px;"></i></button></td>
+  `;
+  if (data?.unit) { tr.querySelector('.qitem-unit').value = data.unit; }
+  tbody.appendChild(tr);
+  calcQuoteTotal();
+}
+
+function calcQuoteTotal() {
+  let subtotal = 0, totalCost = 0;
+  document.querySelectorAll('#quote-items-tbody tr').forEach(tr => {
+    const qty = parseFloat(tr.querySelector('.qitem-qty').value) || 0;
+    const price = parseFloat(tr.querySelector('.qitem-price').value) || 0;
+    const cost = parseFloat(tr.querySelector('.qitem-cost').value) || 0;
+    const sub = qty * price;
+    const lineCost = qty * cost;
+    subtotal += sub;
+    totalCost += lineCost;
+    tr.querySelector('.qitem-subtotal').textContent = '$' + sub.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  });
+  const freight = parseFloat(document.getElementById('quote-freight').value) || 0;
+  const insurance = parseFloat(document.getElementById('quote-insurance').value) || 0;
+  const otherCost = parseFloat(document.getElementById('quote-other-cost').value) || 0;
+  const commissionRate = parseFloat(document.getElementById('quote-commission').value) || 0;
+  const commission = subtotal * commissionRate / 100;
+  const total = subtotal + freight + insurance + otherCost + commission;
+  const currency = document.getElementById('quote-currency').value || 'USD';
+  const sym = currency === 'CNY' ? '¥' : currency === 'EUR' ? '€' : '$';
+  document.getElementById('quote-total').textContent = sym + total.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  document.getElementById('quote-total-cost').textContent = sym + totalCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const margin = total > 0 ? ((total - totalCost) / total * 100).toFixed(1) : '0';
+  document.getElementById('quote-margin').textContent = margin + '%';
+  document.getElementById('quote-margin').style.color = parseFloat(margin) >= 20 ? '#059669' : parseFloat(margin) >= 10 ? '#d97706' : '#dc2626';
+}
+
+async function saveQuote(isDraft) {
+  const customer = document.getElementById('quote-customer').value.trim();
+  if (!customer) { showToast('请选择或输入客户公司', 'warning'); return; }
+  const items = [];
+  document.querySelectorAll('#quote-items-tbody tr').forEach(tr => {
+    const name = tr.querySelector('.qitem-name').value.trim();
+    if (!name) return;
+    items.push({
+      product_name: name,
+      spec: tr.querySelector('.qitem-spec').value.trim(),
+      quantity: parseFloat(tr.querySelector('.qitem-qty').value) || 0,
+      unit: tr.querySelector('.qitem-unit').value,
+      unit_price: parseFloat(tr.querySelector('.qitem-price').value) || 0,
+      unit_cost: parseFloat(tr.querySelector('.qitem-cost').value) || 0,
+    });
+  });
+  if (!items.length) { showToast('请至少添加一个产品明细行', 'warning'); return; }
+  let subtotal = 0, totalCost = 0;
+  items.forEach(it => { subtotal += it.quantity * it.unit_price; totalCost += it.quantity * it.unit_cost; });
+  const freight = parseFloat(document.getElementById('quote-freight').value) || 0;
+  const insurance = parseFloat(document.getElementById('quote-insurance').value) || 0;
+  const otherCost = parseFloat(document.getElementById('quote-other-cost').value) || 0;
+  const commissionRate = parseFloat(document.getElementById('quote-commission').value) || 0;
+  const commission = subtotal * commissionRate / 100;
+  const totalAmount = subtotal + freight + insurance + otherCost + commission;
+  const id = document.getElementById('quote-id').value;
+  const payload = {
+    quote_number: document.getElementById('quote-number').value,
+    customer_name: customer,
+    quote_date: document.getElementById('quote-date').value ? new Date(document.getElementById('quote-date').value).getTime() : Date.now(),
+    valid_until: document.getElementById('quote-valid-until').value ? new Date(document.getElementById('quote-valid-until').value).getTime() : null,
+    currency: document.getElementById('quote-currency').value,
+    status: isDraft ? '草稿' : document.getElementById('quote-status').value,
+    payment_terms: document.getElementById('quote-payment-terms').value,
+    incoterms: document.getElementById('quote-incoterms').value,
+    delivery_time: document.getElementById('quote-delivery').value.trim(),
+    origin_port: document.getElementById('quote-origin').value.trim(),
+    freight, insurance, other_cost: otherCost, commission_rate: commissionRate,
+    subtotal, total_cost: totalCost, total_amount: totalAmount,
+    items: JSON.stringify(items),
+    notes: document.getElementById('quote-notes').value.trim(),
+    version: parseInt(document.getElementById('quote-version').value) || 1,
+  };
+  try {
+    if (id) { await apiPut('quotes', id, payload); showToast('报价单已更新', 'success'); }
+    else { await apiPost('quotes', payload); showToast(isDraft ? '草稿已保存' : '报价单已创建', 'success'); }
+    closeQuoteModal();
+    await loadQuotes();
+    if (currentPage === 'dashboard') loadDashboard();
+  } catch(e) { showToast('保存失败: ' + e.message.substring(0,100), 'error'); }
+}
+
+function editQuote(id) {
+  const q = allQuotes.find(q => q.id === id);
+  if (q) {
+    let items = [];
+    try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
+    openQuoteModal({...q, items});
+  }
+}
+
+async function duplicateQuote(id) {
+  const q = allQuotes.find(q => q.id === id);
+  if (!q) return;
+  let items = [];
+  try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
+  const newQuote = {...q, id: null, quote_number: generateQuoteNumber(), version: (q.version||1)+1, status: '草稿', items};
+  openQuoteModal(newQuote);
+  showToast('已复制为新版本 v' + newQuote.version + '，请修改后保存', 'info', 4000);
+}
+
+function deleteQuote(id) {
+  const q = allQuotes.find(q => q.id === id);
+  showConfirm(`确定删除报价单「${q?.quote_number||''}」？`, async () => {
+    try { await apiDelete('quotes', id); showToast('已删除', 'success'); await loadQuotes(); }
+    catch(e) { showToast('删除失败', 'error'); }
+  });
+}
+
+function previewQuote(id) {
+  const q = allQuotes.find(q => q.id === id);
+  if (!q) return;
+  let items = [];
+  try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
+  const sym = q.currency === 'CNY' ? '¥' : q.currency === 'EUR' ? '€' : '$';
+  const body = document.getElementById('quote-preview-body');
+  body.innerHTML = `
+    <div style="padding:20px;font-family:'Inter','PingFang SC',sans-serif;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;border-bottom:2px solid #1a56db;padding-bottom:16px;">
+        <div>
+          <div style="font-size:22px;font-weight:800;color:#111827;">报价单 Quotation</div>
+          <div style="font-size:13px;color:#6b7280;margin-top:4px;">编号：${escHtml(q.quote_number)} ${q.version>1?'(v'+q.version+')':''}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:13px;color:#374151;">日期：${formatDate(q.quote_date)}</div>
+          <div style="font-size:13px;color:#374151;">有效期至：${formatDate(q.valid_until)}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:40px;margin-bottom:20px;">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">To (客户)</div>
+          <div style="font-size:14px;font-weight:700;color:#111827;">${escHtml(q.customer_name)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">贸易条款</div>
+          <div style="font-size:14px;font-weight:600;">${escHtml(q.incoterms||'-')} ${q.origin_port?escHtml(q.origin_port):''}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">付款方式</div>
+          <div style="font-size:13px;">${escHtml(q.payment_terms||'-')}</div>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f3f4f6;">
+          <th style="padding:10px 12px;text-align:left;border:1px solid #e5e7eb;">产品名称</th>
+          <th style="padding:10px 12px;text-align:left;border:1px solid #e5e7eb;">规格</th>
+          <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">数量</th>
+          <th style="padding:10px 12px;text-align:center;border:1px solid #e5e7eb;">单位</th>
+          <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">单价(${sym})</th>
+          <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">小计(${sym})</th>
+        </tr></thead>
+        <tbody>
+          ${items.map(it => {
+            const sub = (it.quantity||0) * (it.unit_price||0);
+            return `<tr>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;font-weight:600;">${escHtml(it.product_name)}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;">${escHtml(it.spec||'-')}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">${it.quantity||0}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:center;">${escHtml(it.unit||'')}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">${(it.unit_price||0).toFixed(2)}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${sub.toFixed(2)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+        <div style="min-width:260px;">
+          ${q.freight?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>运费：</span><span>${sym}${(q.freight||0).toFixed(2)}</span></div>`:''}
+          ${q.insurance?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>保险费：</span><span>${sym}${(q.insurance||0).toFixed(2)}</span></div>`:''}
+          ${q.other_cost?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>其他费用：</span><span>${sym}${(q.other_cost||0).toFixed(2)}</span></div>`:''}
+          <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:15px;font-weight:800;color:#1a56db;border-top:2px solid #1a56db;margin-top:6px;">
+            <span>合计 Total：</span><span>${sym}${(q.total_amount||0).toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+      ${q.delivery_time?`<div style="margin-top:16px;padding:10px 14px;background:#f0f9ff;border-radius:8px;font-size:13px;color:#0369a1;"><strong>交货周期：</strong>${escHtml(q.delivery_time)}</div>`:''}
+      ${q.notes?`<div style="margin-top:12px;padding:12px 14px;background:#f9fafb;border-radius:8px;font-size:12.5px;color:#374151;line-height:1.6;"><strong>备注：</strong>${escHtml(q.notes)}</div>`:''}
+    </div>`;
+  document.getElementById('quote-preview-modal').classList.add('active');
+}
+
+function closeQuotePreview() {
+  document.getElementById('quote-preview-modal').classList.remove('active');
+}
+
+function printQuote() {
+  const body = document.getElementById('quote-preview-body').innerHTML;
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>报价单</title><style>body{font-family:'Inter','PingFang SC',sans-serif;padding:30px;}table{width:100%;border-collapse:collapse;font-size:13px;}th,td{border:1px solid #e5e7eb;padding:9px 12px;}th{background:#f3f4f6;}@media print{body{padding:15px;}}</style></head><body>${body}</body></html>`);
+  w.document.close();
+  setTimeout(() => { w.print(); }, 300);
+}
+
+function refreshQuoteDatalist() {
+  const dl = document.getElementById('quote-datalist');
+  if (!dl) return;
+  dl.innerHTML = allQuotes.map(q => `<option value="${escHtml(q.quote_number)}">`).join('');
+}
+
+async function exportQuotes() {
+  const data = await apiGet('quotes', {limit:1000});
+  const rows = data.data || [];
+  if (!rows.length) { showToast('暂无报价数据', 'warning'); return; }
+  const headers = ['报价单号','客户','日期','有效期','币种','小计','运费','保险','其他','佣金率','总成本','总金额','利润率','状态','版本','贸易条款','付款方式','交货周期','起运港','备注'];
+  const sheetData = [headers, ...rows.map(q => {
+    const margin = q.total_amount ? (((q.total_amount - (q.total_cost||0)) / q.total_amount) * 100).toFixed(1) : '0';
+    return [q.quote_number, q.customer_name, formatDate(q.quote_date), formatDate(q.valid_until), q.currency, q.subtotal||0, q.freight||0, q.insurance||0, q.other_cost||0, q.commission_rate||0, q.total_cost||0, q.total_amount||0, margin+'%', q.status, 'v'+(q.version||1), q.incoterms, q.payment_terms, q.delivery_time, q.origin_port, q.notes];
+  })];
+  downloadExcel([{name:'报价管理', data:sheetData}], `报价管理_${todayStr()}.xlsx`);
+  showToast(`已导出 ${rows.length} 条报价记录`, 'success');
+}
+
+/* ===================================================
+   orders.js - 订单跟踪模块
+   =================================================== */
+let allOrders = [];
+
+function generateOrderNumber() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const rand = Math.floor(Math.random()*900+100);
+  return 'PO-' + y + m + dd + '-' + rand;
+}
+
+async function loadOrders() {
+  try {
+    const data = await apiGet('orders', { limit: 500 });
+    allOrders = data.data || [];
+    renderOrders();
+    renderOrderStats();
+  } catch(e) { showToast('加载订单数据失败', 'error'); }
+}
+
+function renderOrderStats() {
+  const container = document.getElementById('order-stats-row');
+  if (!container) return;
+  const total = allOrders.length;
+  const production = allOrders.filter(o=>o.status==='生产跟进').length;
+  const shipping = allOrders.filter(o=>o.status==='出货物流').length;
+  const completed = allOrders.filter(o=>o.status==='回款完成').length;
+  const totalAmount = allOrders.reduce((s,o)=>s+(o.order_amount||0),0);
+  const items = [
+    {icon:'📦',label:'订单总数',value:total,color:'#1a56db',bg:'#e8f0fe'},
+    {icon:'🏭',label:'生产中',value:production,color:'#d97706',bg:'#fef3c7'},
+    {icon:'🚢',label:'运输中',value:shipping,color:'#0891b2',bg:'#e0f2fe'},
+    {icon:'✅',label:'已完成',value:completed,color:'#059669',bg:'#d1fae5'},
+    {icon:'💵',label:'订单总额',value:'$'+(totalAmount>9999?(totalAmount/1000).toFixed(1)+'K':totalAmount.toLocaleString()),color:'#7c3aed',bg:'#ede9fe'},
+  ];
+  container.innerHTML = items.map(item=>`<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:12px;min-width:130px;"><div style="width:40px;height:40px;border-radius:10px;background:${item.bg};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">${item.icon}</div><div><div style="font-size:22px;font-weight:800;color:${item.color};">${item.value}</div><div style="font-size:12px;color:#6b7280;">${item.label}</div></div></div>`).join('');
+}
+
+const ORDER_STAGES = ['下单确认','生产跟进','出货物流','回款完成'];
+const ORDER_STAGE_ICONS = {'下单确认':'✅','生产跟进':'🏭','出货物流':'🚢','回款完成':'💳'};
+const ORDER_STAGE_COLORS = {'下单确认':'badge-success','生产跟进':'badge-warning','出货物流':'badge-secondary','回款完成':'badge-success'};
+
+function renderOrders() {
+  const container = document.getElementById('orders-container');
+  if (!allOrders.length) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><h3>暂无订单</h3><p>点击「新建订单」开始跟踪您的订单全流程</p></div>`;
+    return;
+  }
+  const filtered = filterOrdersList();
+  if (!filtered.length) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><h3>无匹配订单</h3><p>调整筛选条件试试</p></div>`;
+    return;
+  }
+  container.innerHTML = filtered.map(o => {
+    const stageIdx = ORDER_STAGES.indexOf(o.status);
+    const priorityColors = {'高':'#dc2626','中':'#d97706','低':'#059669'};
+    const paidAmount = o.paid_amount || 0;
+    const balance = (o.order_amount||0) - paidAmount;
+    const sym = o.currency === 'CNY' ? '¥' : o.currency === 'EUR' ? '€' : '$';
+    return `<div class="card" style="margin-bottom:16px;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#f9fafb;border-bottom:1px solid #f3f4f6;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="font-weight:800;color:#111827;font-size:15px;">${escHtml(o.order_number)}</div>
+          <span class="badge ${ORDER_STAGE_COLORS[o.status]||'badge-gray'}">${ORDER_STAGE_ICONS[o.status]||''} ${o.status||'-'}</span>
+          ${o.priority?`<span style="width:8px;height:8px;border-radius:50%;background:${priorityColors[o.priority]||'#9ca3af'};" title="${o.priority}优先级"></span>`:''}
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-ghost btn-sm" onclick="viewOrderDetail('${o.id}')" style="color:#1a56db;"><i class="fas fa-eye" style="font-size:11px;"></i> 详情</button>
+          <button class="btn btn-ghost btn-sm" onclick="editOrder('${o.id}')"><i class="fas fa-pen" style="font-size:11px;"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="advanceOrderStatus('${o.id}')" style="color:#059669;"><i class="fas fa-arrow-right" style="font-size:11px;"></i> 推进</button>
+          <button class="btn btn-ghost btn-sm" onclick="deleteOrder('${o.id}')" style="color:#dc2626;"><i class="fas fa-trash" style="font-size:11px;"></i></button>
+        </div>
+      </div>
+      <div style="padding:16px 20px;">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:16px;margin-bottom:12px;">
+          <div>
+            <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;">客户</div>
+            <div style="font-size:14px;font-weight:700;color:#111827;margin-top:3px;">${escHtml(o.customer_name)}</div>
+            ${o.quote_ref?`<div style="font-size:11px;color:#6b7280;margin-top:2px;">关联报价：${escHtml(o.quote_ref)}</div>`:''}
+          </div>
+          <div>
+            <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;">订单金额</div>
+            <div style="font-size:14px;font-weight:700;color:#1a56db;margin-top:3px;">${sym}${(o.order_amount||0).toLocaleString()}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;">已收款</div>
+            <div style="font-size:14px;font-weight:700;color:#059669;margin-top:3px;">${sym}${paidAmount.toLocaleString()}</div>
+            ${balance>0?`<div style="font-size:11px;color:#dc2626;margin-top:2px;">尾款 ${sym}${balance.toLocaleString()}</div>`:'<div style="font-size:11px;color:#059669;margin-top:2px;">已结清</div>'}
+          </div>
+          <div>
+            <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;">预计交货</div>
+            <div style="font-size:13px;font-weight:600;margin-top:3px;color:${o.eta&&isOverdue(formatDateInput(o.eta))?'#dc2626':'#374151'};">${formatDate(o.eta)}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0;margin-top:8px;">
+          ${ORDER_STAGES.map((s,i) => {
+            const cls = i < stageIdx ? 'done' : i === stageIdx ? 'active' : '';
+            return `<div class="stage-step ${cls}"><div class="step-dot"></div>${ORDER_STAGE_ICONS[s]} ${s}</div>${i<ORDER_STAGES.length-1?`<div class="stage-connector ${i<stageIdx?'done':''}"></div>`:''}`;
+          }).join('')}
+        </div>
+        ${o.tracking_no?`<div style="margin-top:10px;font-size:12px;color:#6b7280;">${o.logistics||''} | 运单号：${escHtml(o.tracking_no)}</div>`:''}
+        ${o.notes?`<div style="margin-top:8px;font-size:12px;color:#6b7280;padding:8px 12px;background:#f9fafb;border-radius:6px;">${escHtml(o.notes)}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterOrdersList() {
+  const search = (document.getElementById('order-search')?.value||'').toLowerCase();
+  const status = document.getElementById('order-filter-status')?.value||'';
+  const priority = document.getElementById('order-filter-priority')?.value||'';
+  return allOrders.filter(o => {
+    if (search && !o.order_number?.toLowerCase().includes(search) && !o.customer_name?.toLowerCase().includes(search)) return false;
+    if (status && o.status !== status) return false;
+    if (priority && o.priority !== priority) return false;
+    return true;
+  });
+}
+
+function filterOrders() { renderOrders(); }
+
+function openOrderModal(order) {
+  const isEdit = !!order;
+  document.getElementById('order-modal-title').textContent = isEdit ? '编辑订单' : '新建订单';
+  document.getElementById('order-id').value = order?.id || '';
+  document.getElementById('order-number').value = order?.order_number || generateOrderNumber();
+  document.getElementById('order-customer').value = order?.customer_name || '';
+  document.getElementById('order-quote-ref').value = order?.quote_ref || '';
+  document.getElementById('order-date').value = order?.order_date ? formatDateInput(order.order_date) : new Date().toISOString().slice(0,10);
+  document.getElementById('order-status').value = order?.status || '下单确认';
+  document.getElementById('order-priority').value = order?.priority || '中';
+  document.getElementById('order-amount').value = order?.order_amount || '';
+  document.getElementById('order-currency').value = order?.currency || 'USD';
+  document.getElementById('order-eta').value = order?.eta ? formatDateInput(order.eta) : '';
+  document.getElementById('order-ship-date').value = order?.ship_date ? formatDateInput(order.ship_date) : '';
+  document.getElementById('order-payment-terms').value = order?.payment_terms || 'T/T 30% deposit, 70% before shipment';
+  document.getElementById('order-incoterms').value = order?.incoterms || 'FOB';
+  document.getElementById('order-paid').value = order?.paid_amount || '';
+  document.getElementById('order-logistics').value = order?.logistics || '海运';
+  document.getElementById('order-tracking').value = order?.tracking_no || '';
+  document.getElementById('order-notes').value = order?.notes || '';
+  const tbody = document.getElementById('order-items-tbody');
+  tbody.innerHTML = '';
+  let items = [];
+  try { items = typeof order?.items === 'string' ? JSON.parse(order.items) : (order?.items || []); } catch(e) {}
+  if (items.length) items.forEach(item => addOrderItem(item));
+  else addOrderItem();
+  updateOrderBalance();
+  document.getElementById('order-modal').classList.add('active');
+}
+
+function closeOrderModal() { document.getElementById('order-modal').classList.remove('active'); }
+
+function addOrderItem(data) {
+  const tbody = document.getElementById('order-items-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" class="form-control oitem-name" value="${data?.product_name||''}" placeholder="产品名称" style="font-size:12px;padding:6px 8px;"></td>
+    <td><input type="text" class="form-control oitem-spec" value="${data?.spec||''}" placeholder="规格" style="font-size:12px;padding:6px 8px;"></td>
+    <td><input type="number" class="form-control oitem-qty" value="${data?.quantity||''}" placeholder="0" style="font-size:12px;padding:6px 8px;"></td>
+    <td><select class="form-control oitem-unit" style="font-size:12px;padding:6px 8px;"><option>MT</option><option>KG</option><option>PC</option><option>SET</option><option>ROL</option><option>COIL</option><option>DRUM</option></select></td>
+    <td><input type="number" class="form-control oitem-price" value="${data?.unit_price||''}" placeholder="0.00" step="0.01" style="font-size:12px;padding:6px 8px;"></td>
+    <td class="oitem-subtotal" style="font-weight:700;color:#1a56db;padding:6px 8px;">$0.00</td>
+    <td><button class="btn btn-ghost btn-sm" onclick="this.closest('tr').remove();" style="color:#dc2626;padding:2px;"><i class="fas fa-times" style="font-size:11px;"></i></button></td>
+  `;
+  if (data?.unit) tr.querySelector('.oitem-unit').value = data.unit;
+  tr.querySelector('.oitem-qty').addEventListener('input', () => {
+    const qty = parseFloat(tr.querySelector('.oitem-qty').value) || 0;
+    const price = parseFloat(tr.querySelector('.oitem-price').value) || 0;
+    tr.querySelector('.oitem-subtotal').textContent = '$' + (qty*price).toFixed(2);
+    updateOrderAmount();
+  });
+  tr.querySelector('.oitem-price').addEventListener('input', () => {
+    const qty = parseFloat(tr.querySelector('.oitem-qty').value) || 0;
+    const price = parseFloat(tr.querySelector('.oitem-price').value) || 0;
+    tr.querySelector('.oitem-subtotal').textContent = '$' + (qty*price).toFixed(2);
+    updateOrderAmount();
+  });
+  tbody.appendChild(tr);
+}
+
+function updateOrderAmount() {
+  let total = 0;
+  document.querySelectorAll('#order-items-tbody tr').forEach(tr => {
+    const qty = parseFloat(tr.querySelector('.oitem-qty').value) || 0;
+    const price = parseFloat(tr.querySelector('.oitem-price').value) || 0;
+    total += qty * price;
+  });
+  if (total > 0) document.getElementById('order-amount').value = total.toFixed(2);
+}
+
+function updateOrderBalance() {
+  const amount = parseFloat(document.getElementById('order-amount').value) || 0;
+  const paid = parseFloat(document.getElementById('order-paid').value) || 0;
+  const balance = amount - paid;
+  document.getElementById('order-balance').value = balance.toFixed(2);
+}
+
+async function saveOrder() {
+  const customer = document.getElementById('order-customer').value.trim();
+  if (!customer) { showToast('请选择或输入客户公司', 'warning'); return; }
+  const items = [];
+  document.querySelectorAll('#order-items-tbody tr').forEach(tr => {
+    const name = tr.querySelector('.oitem-name').value.trim();
+    if (!name) return;
+    items.push({
+      product_name: name,
+      spec: tr.querySelector('.oitem-spec').value.trim(),
+      quantity: parseFloat(tr.querySelector('.oitem-qty').value) || 0,
+      unit: tr.querySelector('.oitem-unit').value,
+      unit_price: parseFloat(tr.querySelector('.oitem-price').value) || 0,
+    });
+  });
+  const id = document.getElementById('order-id').value;
+  const payload = {
+    order_number: document.getElementById('order-number').value,
+    customer_name: customer,
+    quote_ref: document.getElementById('order-quote-ref').value.trim(),
+    order_date: document.getElementById('order-date').value ? new Date(document.getElementById('order-date').value).getTime() : Date.now(),
+    status: document.getElementById('order-status').value,
+    priority: document.getElementById('order-priority').value,
+    order_amount: parseFloat(document.getElementById('order-amount').value) || 0,
+    currency: document.getElementById('order-currency').value,
+    eta: document.getElementById('order-eta').value ? new Date(document.getElementById('order-eta').value).getTime() : null,
+    ship_date: document.getElementById('order-ship-date').value ? new Date(document.getElementById('order-ship-date').value).getTime() : null,
+    payment_terms: document.getElementById('order-payment-terms').value,
+    incoterms: document.getElementById('order-incoterms').value,
+    paid_amount: parseFloat(document.getElementById('order-paid').value) || 0,
+    logistics: document.getElementById('order-logistics').value,
+    tracking_no: document.getElementById('order-tracking').value.trim(),
+    items: JSON.stringify(items),
+    notes: document.getElementById('order-notes').value.trim(),
+  };
+  try {
+    if (id) { await apiPut('orders', id, payload); showToast('订单已更新', 'success'); }
+    else { await apiPost('orders', payload); showToast('订单已创建', 'success'); }
+    closeOrderModal();
+    await loadOrders();
+    if (currentPage === 'dashboard') loadDashboard();
+  } catch(e) { showToast('保存失败: ' + e.message.substring(0,100), 'error'); }
+}
+
+function editOrder(id) {
+  const o = allOrders.find(o => o.id === id);
+  if (o) openOrderModal(o);
+}
+
+async function advanceOrderStatus(id) {
+  const o = allOrders.find(o => o.id === id);
+  if (!o) return;
+  const curIdx = ORDER_STAGES.indexOf(o.status);
+  if (curIdx >= ORDER_STAGES.length - 1) { showToast('已经是最终状态', 'info'); return; }
+  const nextStatus = ORDER_STAGES[curIdx + 1];
+  showConfirm(`确认将订单「${o.order_number}」状态推进到「${nextStatus}」？`, async () => {
+    try {
+      const updates = { ...o, status: nextStatus };
+      if (nextStatus === '出货物流' && !o.ship_date) updates.ship_date = Date.now();
+      if (nextStatus === '回款完成') updates.paid_amount = o.order_amount || 0;
+      await apiPut('orders', id, updates);
+      showToast(`已推进到「${nextStatus}」`, 'success');
+      await loadOrders();
+      if (currentPage === 'dashboard') loadDashboard();
+    } catch(e) { showToast('操作失败', 'error'); }
+  });
+}
+
+function deleteOrder(id) {
+  const o = allOrders.find(o => o.id === id);
+  showConfirm(`确定删除订单「${o?.order_number||''}」？`, async () => {
+    try { await apiDelete('orders', id); showToast('已删除', 'success'); await loadOrders(); }
+    catch(e) { showToast('删除失败', 'error'); }
+  });
+}
+
+function viewOrderDetail(id) {
+  const o = allOrders.find(o => o.id === id);
+  if (!o) return;
+  let items = [];
+  try { items = typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []); } catch(e) {}
+  const sym = o.currency === 'CNY' ? '¥' : o.currency === 'EUR' ? '€' : '$';
+  const paidAmount = o.paid_amount || 0;
+  const balance = (o.order_amount||0) - paidAmount;
+  const stageIdx = ORDER_STAGES.indexOf(o.status);
+  document.getElementById('od-title').textContent = `订单详情 · ${o.order_number}`;
+  document.getElementById('od-body').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:10px;">基本信息</div>
+        <div class="info-list">
+          <div class="info-item"><div class="info-label">订单号</div><div class="info-value" style="font-weight:700;">${escHtml(o.order_number)}</div></div>
+          <div class="info-item"><div class="info-label">客户</div><div class="info-value">${escHtml(o.customer_name)}</div></div>
+          <div class="info-item"><div class="info-label">订单日期</div><div class="info-value">${formatDate(o.order_date)}</div></div>
+          <div class="info-item"><div class="info-label">状态</div><div class="info-value"><span class="badge ${ORDER_STAGE_COLORS[o.status]||'badge-gray'}">${ORDER_STAGE_ICONS[o.status]||''} ${o.status}</span></div></div>
+          <div class="info-item"><div class="info-label">优先级</div><div class="info-value">${o.priority||'-'}</div></div>
+          ${o.quote_ref?`<div class="info-item"><div class="info-label">关联报价</div><div class="info-value">${escHtml(o.quote_ref)}</div></div>`:''}
+        </div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:10px;">金额 & 物流</div>
+        <div class="info-list">
+          <div class="info-item"><div class="info-label">订单金额</div><div class="info-value" style="font-weight:700;color:#1a56db;">${sym}${(o.order_amount||0).toLocaleString()}</div></div>
+          <div class="info-item"><div class="info-label">已收款</div><div class="info-value" style="color:#059669;font-weight:700;">${sym}${paidAmount.toLocaleString()}</div></div>
+          <div class="info-item"><div class="info-label">尾款</div><div class="info-value" style="color:${balance>0?'#dc2626':'#059669'};font-weight:700;">${sym}${balance.toLocaleString()}</div></div>
+          <div class="info-item"><div class="info-label">预计交货</div><div class="info-value">${formatDate(o.eta)}</div></div>
+          <div class="info-item"><div class="info-label">实际发货</div><div class="info-value">${formatDate(o.ship_date)}</div></div>
+          <div class="info-item"><div class="info-label">贸易条款</div><div class="info-value">${escHtml(o.incoterms||'-')}</div></div>
+          <div class="info-item"><div class="info-label">付款方式</div><div class="info-value">${escHtml(o.payment_terms||'-')}</div></div>
+          <div class="info-item"><div class="info-label">物流方式</div><div class="info-value">${escHtml(o.logistics||'-')}</div></div>
+          ${o.tracking_no?`<div class="info-item"><div class="info-label">运单号</div><div class="info-value">${escHtml(o.tracking_no)}</div></div>`:''}
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;">订单进度</div>
+      <div style="display:flex;align-items:center;gap:0;">
+        ${ORDER_STAGES.map((s,i) => {
+          const cls = i < stageIdx ? 'done' : i === stageIdx ? 'active' : '';
+          return `<div class="stage-step ${cls}"><div class="step-dot"></div>${ORDER_STAGE_ICONS[s]} ${s}</div>${i<ORDER_STAGES.length-1?`<div class="stage-connector ${i<stageIdx?'done':''}"></div>`:''}`;
+        }).join('')}
+      </div>
+    </div>
+    ${items.length?`<div style="margin-bottom:16px;"><div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;">产品明细</div><div class="table-wrapper"><table style="font-size:12.5px;"><thead><tr><th>产品名称</th><th>规格</th><th>数量</th><th>单位</th><th>单价</th><th>小计</th></tr></thead><tbody>${items.map(it=>`<tr><td style="font-weight:600;">${escHtml(it.product_name)}</td><td>${escHtml(it.spec||'-')}</td><td>${it.quantity||0}</td><td>${escHtml(it.unit||'')}</td><td>${sym}${(it.unit_price||0).toFixed(2)}</td><td style="font-weight:700;">${sym}${((it.quantity||0)*(it.unit_price||0)).toFixed(2)}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+    ${o.notes?`<div class="card" style="padding:14px;background:#f9fafb;"><div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:6px;">备注</div><p style="font-size:13px;color:#374151;line-height:1.6;white-space:pre-wrap;">${escHtml(o.notes)}</p></div>`:''}
+  `;
+  document.getElementById('order-detail-modal').classList.add('active');
+}
+
+function closeOrderDetail() { document.getElementById('order-detail-modal').classList.remove('active'); }
+
+async function exportOrders() {
+  const data = await apiGet('orders', {limit:1000});
+  const rows = data.data || [];
+  if (!rows.length) { showToast('暂无订单数据', 'warning'); return; }
+  const headers = ['订单号','客户','关联报价','订单日期','状态','优先级','金额','币种','已收款','尾款','预计交货','发货日','贸易条款','付款方式','物流方式','运单号','备注'];
+  const sheetData = [headers, ...rows.map(o => {
+    const balance = (o.order_amount||0) - (o.paid_amount||0);
+    const sym = o.currency === 'CNY' ? '¥' : o.currency === 'EUR' ? '€' : '$';
+    return [o.order_number, o.customer_name, o.quote_ref||'', formatDate(o.order_date), o.status, o.priority, o.order_amount||0, o.currency, o.paid_amount||0, balance, formatDate(o.eta), formatDate(o.ship_date), o.incoterms, o.payment_terms, o.logistics, o.tracking_no, o.notes];
+  })];
+  downloadExcel([{name:'订单跟踪', data:sheetData}], `订单跟踪_${todayStr()}.xlsx`);
+  showToast(`已导出 ${rows.length} 条订单记录`, 'success');
+}
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+function downloadExcel(sheets, filename) {
+  if (typeof XLSX === 'undefined') { showToast('Excel 库未加载', 'error'); return; }
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(s => {
+    const ws = XLSX.utils.aoa_to_sheet(s.data);
+    ws['!cols'] = (s.data[0]||[]).map(() => ({wch:18}));
+    XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0,31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+</script>
+
+<script>
 // 锁定计数改用 localStorage（持久化），防止刷新页面绕过锁定
 let tdpFailCount = parseInt(localStorage.getItem('tdp_fail_count')||'0');
 let tdpLockUntil = parseInt(localStorage.getItem('tdp_lock_until')||'0');
@@ -5474,6 +6807,7 @@ function _tdpInitPage() {
       const pageLoaders = {
         todos: loadTodos, customers: loadCustomers, pipeline: loadPipeline,
         followup: loadFollowups, investigation: loadInvestigations,
+        quotes: loadQuotes, orders: loadOrders,
         products: loadDocs, selector: loadSelector, feedback: loadFeedbackPage
       };
       const activePage = typeof currentPage !== 'undefined' ? currentPage : '';
