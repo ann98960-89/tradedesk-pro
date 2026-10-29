@@ -333,6 +333,15 @@ async function unwrapDEK(wrapped,kek){
 }
 async function encryptValue(plainText){if(!_cryptoKey)throw new Error('未登录，无法加密');if(plainText===null||plainText===undefined||plainText==='')return '';const enc=new TextEncoder(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},_cryptoKey,enc.encode(String(plainText)));return 'ENC:'+bufToB64(iv.buffer)+':'+bufToB64(ct);}
 async function decryptValue(encText){if(!_cryptoKey)return encText;if(!encText||!String(encText).startsWith('ENC:'))return encText;try{const parts=String(encText).split(':'),iv=new Uint8Array(b64ToBuf(parts[1])),ct=b64ToBuf(parts.slice(2).join(':'));const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},_cryptoKey,ct);return new TextDecoder().decode(plain);}catch(e){return '[解密失败]';}}
+/* 判断一条记录是否含有解密失败的字段 —— 用于阻止脏数据覆盖本地正常数据 */
+const _DECRYPT_FAIL_MARK='[解密失败]';
+function _hasDecryptFail(obj){
+  if(!obj||typeof obj!=='object')return false;
+  for(const v of Object.values(obj)){
+    if(typeof v==='string'&&v===_DECRYPT_FAIL_MARK)return true;
+  }
+  return false;
+}
 /* 数值型列清单（bigint / double precision）—— 这些列不能存密文字符串，
    也不能存空字符串（PostgREST 会报 22P02 invalid input syntax for type bigint: ""）。
    通过对生产库逐列探测得出（2026-10-29）。
@@ -469,8 +478,9 @@ async function _upgradeToDEK(oldKEK, saltBuf) {
   // 2. 用旧密码派生新 KEK（使用旧 salt 保持盐不变，省去重新派生）
   const wrappedDEK=await wrapDEK(dekRaw,oldKEK);
   // 3. 读取所有表数据（用旧 KEK 即当前 _cryptoKey 解密）
-  const ALL=['customers','todos','followups','customer_investigation','product_docs','trial_feedback'];
+  const ALL=['customers','todos','followups','customer_investigation','product_docs','trial_feedback','quotes','orders'];
   const snapshots={};
+  const failedTables=[];
   for(const tbl of ALL){
     try{
       const raw=localStorage.getItem('tdp_table_'+tbl);
@@ -482,7 +492,12 @@ async function _upgradeToDEK(oldKEK, saltBuf) {
       } else {
         snapshots[tbl]=JSON.parse(raw);
       }
-    }catch(e){snapshots[tbl]=[];}
+    }catch(e){
+      /* 解密失败时绝不能用空数组覆盖原数据（会造成不可逆的数据丢失）。
+         保留原密文，该表跳过迁移 —— 登录后可用 DEK 直接解密。 */
+      failedTables.push(tbl);
+      console.warn('[TDP] 表 '+tbl+' 用旧密钥解密失败，保留原始数据不迁移:', e.message);
+    }
   }
   // 4. 用新 DEK 重新加密所有表数据
   const _tmpOld=_cryptoKey;
@@ -497,6 +512,13 @@ async function _upgradeToDEK(oldKEK, saltBuf) {
     }catch(e){console.warn('[TDP] 表'+tbl+'迁移失败:',e);}
   }
   // 5. 更新 vault token（用新 DEK 加密）
+  /* 若有表迁移失败，不能更新 vault token —— 否则下次登录会走 DEK 路径，
+     而那些表仍是用旧 KEK 加密的，将永久无法解密。保留旧 token 让下次登录继续走兼容路径。 */
+  if (failedTables.length) {
+    console.warn('[TDP] ⚠️ 以下表未完成迁移，vault token 保持不变（下次登录仍走旧密钥路径）:', failedTables.join(', '));
+    console.warn('[TDP] 这些表的数据在本地仍然完好，未做任何修改。');
+    return;
+  }
   const randHex=bufToB64(crypto.getRandomValues(new Uint8Array(8)).buffer);
   const newToken=await encryptValueWithKey('TDP_VERIFY::'+randHex,dekKey);
   localStorage.setItem(DEK_KEY,wrappedDEK);
@@ -3076,12 +3098,29 @@ async function _pullFromCloud() {
       const map   = {};
       // 本地数据优先放入 map
       local.forEach(r => { map[r.id] = r; });
-      // 仅当 Supabase 记录比本地更新时才覆盖
+      /* 合并策略（关键安全约束）：
+         1. 本地已有的记录，只要本地版本能正常显示，就以本地为准 —— 除非云端
+            明确「有改动」（用版本号/修订号判断，而非单纯比较 updated_at）。
+         2. 云端记录若存在解密失败的字段，说明它是用另一把密钥或损坏数据写入的，
+            绝不能覆盖本地 —— 直接跳过，否则会造成不可逆的数据丢失。 */
+      let skippedCorrupt = 0;
       remote.forEach(r => {
-        if (!map[r.id] || (r.updated_at||0) > (map[r.id].updated_at||0)) {
+        if (_hasDecryptFail(r)) { skippedCorrupt++; return; }
+        const localRow = map[r.id];
+        if (!localRow) { map[r.id] = r; return; }
+        // 云端有显式版本号时按版本号比较；否则只有当本地记录缺失关键字段时才用云端补全
+        const remoteVer = r._rev || r.version || 0;
+        const localVer  = localRow._rev || localRow.version || 0;
+        if (remoteVer && localVer) {
+          if (remoteVer > localVer) map[r.id] = r;
+        } else if (_hasDecryptFail(localRow)) {
+          // 本地这条已经坏了，用云端的好数据替换
           map[r.id] = r;
         }
       });
+      if (skippedCorrupt) {
+        console.warn(`[TDP] ⚠️ 表 ${tbl} 有 ${skippedCorrupt} 条云端记录解密失败，已跳过（未覆盖本地）`);
+      }
       const merged = Object.values(map);
       /* 数据清洗：云端历史数据可能存了英文枚举（high/medium/low、pending/completed），
          落库前统一归一化为中文标准值。这样本地存储变干净，
@@ -3380,14 +3419,37 @@ async function _pushAllToCloud() {
   let total = 0, failed = 0;
   for (const tbl of _ALL_TABLES) {
     try {
-      const rows = await _loadTableDecrypted(tbl);
+      /* 先把云端独有的记录拉回本地合并，再统一加密推送。
+         否则云端存在、本地缺失的记录（比如历史遗留的明文数据）永远得不到加密，
+         会一直以明文形式留在数据库里。 */
+      let rows = await _loadTableDecrypted(tbl);
+      const localIds = new Set(rows.map(r => r.id));
+      try {
+        const res = await _sbFetch(`${tbl}?limit=5000&select=*`);
+        if (res.ok) {
+          const remote = await res.json();
+          if (Array.isArray(remote) && remote.length) {
+            const dec = _cryptoKey ? await decryptArray(remote) : remote;
+            const extra = dec.filter(r => r && r.id && !localIds.has(r.id) && !_hasDecryptFail(r));
+            if (extra.length) {
+              console.log(`[TDP] 表 ${tbl}: 从云端补回 ${extra.length} 条本地缺失的记录`);
+              rows = rows.concat(extra);
+              await _saveTableEncrypted(tbl, rows);
+            }
+          }
+        }
+      } catch(e) { console.warn('[TDP] 补拉云端记录失败（继续推送本地数据）:', e.message); }
+
       const active = rows.filter(r => !r._deleted);
-      if (!active.length) continue;
+      /* 已删除的记录也要推送（加密后覆盖云端），否则云端的历史明文记录
+         永远留在数据库里无法清除。软删除标记 _deleted 本身是元字段，不加密。 */
+      const toPush = rows.length ? rows : active;
+      if (!toPush.length) continue;
 
       // 逐条加密 → 清洗 → 组批
       const batch = [];
       const reqFallbacks = {};   // NOT NULL 列的密文兜底值（供字段并集补齐使用）
-      for (const row of active) {
+      for (const row of toPush) {
         const clean = Object.fromEntries(
           Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
         );
@@ -3459,7 +3521,7 @@ async function _pushAllToCloud() {
         }
         if (i + _PUSH_BATCH < batch.length) await _sleep(_PUSH_GAP);
       }
-      console.log(`[TDP] 表 ${tbl}: 已推送 ${active.length} 条`);
+      console.log(`[TDP] 表 ${tbl}: 已推送 ${toPush.length} 条（有效 ${active.length}，已删除 ${toPush.length - active.length}）`);
     } catch(e) { console.warn(`[TDP] 读取 ${tbl} 失败:`, e.message); failed++; }
   }
   console.log(`[TDP] ✅ 全量推送完成，成功 ${total} 条${failed ? `，失败 ${failed} 条` : ''}`);
@@ -3490,6 +3552,66 @@ window._tdpForcePush = async function() {
 };
 
 console.log('[TDP] ✅ Supabase 云同步模式 | 本地 AES-256-GCM 加密 + Supabase 云端备份');
+
+/* ==== 数据健康诊断（控制台可用 window._tdpDiagnose() 调用）====
+   检查本地各表能否用当前密钥解密、有多少字段解密失败。 */
+window._tdpDiagnose = async function(){
+  const report = { loggedIn: !!_cryptoKey, tables: {} };
+  console.log('%c🔍 TradeDesk 数据诊断', 'font-weight:bold;font-size:14px');
+  if (!_cryptoKey) {
+    console.warn('⚠️ 当前未登录，无法解密本地数据');
+    return report;
+  }
+  for (const tbl of _ALL_TABLES) {
+    try {
+      const raw = localStorage.getItem(_storeKey(tbl));
+      if (!raw) { report.tables[tbl] = { exists: false }; continue; }
+      let rows;
+      if (raw.startsWith('ENC2:') && _cryptoKey) {
+        const parts = raw.split(':');
+        const iv = new Uint8Array(b64ToBuf(parts[1]));
+        const ct = b64ToBuf(parts.slice(2).join(':'));
+        const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv}, _cryptoKey, ct);
+        rows = JSON.parse(new TextDecoder().decode(plain));
+      } else {
+        rows = JSON.parse(raw);
+      }
+      const active = (rows||[]).filter(r=>!r._deleted);
+      let failFields = 0, totalFields = 0;
+      for (const r of (rows||[])) {
+        for (const v of Object.values(r)) {
+          if (typeof v === 'string' && v.length > 0) {
+            totalFields++;
+            if (v === '[解密失败]') failFields++;
+          }
+        }
+      }
+      report.tables[tbl] = {
+        exists: true, total: (rows||[]).length, active: active.length,
+        totalFields, failFields,
+        status: failFields === 0 ? '✅ 正常' : '❌ 有解密失败字段'
+      };
+      console.log(`  ${tbl}: ${(rows||[]).length} 条（有效 ${active.length}），字段 ${totalFields}，解密失败 ${failFields}`);
+    } catch(e) {
+      report.tables[tbl] = { exists: true, error: e.message };
+      console.error(`  ${tbl}: ❌ 无法解密整表 —`, e.message);
+    }
+  }
+  const bad = Object.entries(report.tables).filter(([,v])=>v.failFields>0 || v.error);
+  console.log(bad.length===0
+    ? '%c✅ 全部表数据完好，解密正常'
+    : '%c⚠️ 以下表存在解密失败：' + bad.map(([k])=>k).join(', '),
+    bad.length===0?'color:#16a34a;font-weight:bold':'color:#dc2626;font-weight:bold');
+  return report;
+};
+
+/* ==== 强制重新推送：用本地数据覆盖云端（修复云端脏数据）==== */
+window._tdpRepairPush = async function(){
+  console.log('%c🔧 开始修复推送（本地 → 云端）', 'font-weight:bold;font-size:14px');
+  const r = await _pushAllToCloud();
+  console.log('修复推送结果:', r);
+  return r;
+};
 
 /* recycle.js 需要的 PATCH 等价操作 */
 async function softDelete(table, id, label) {
