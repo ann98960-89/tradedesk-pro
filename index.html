@@ -373,6 +373,29 @@ function _sanitizeForPush(obj){
   }
   return out;
 }
+
+/* PostgREST 批量 upsert 要求：同一批次内所有对象的字段集合必须完全一致，
+   否则报 PGRST-126 "All object keys must match"。
+   本地各条记录的字段可能不全（如某些客户没填 next_followup_date），
+   因此推送前取批内字段并集，缺失的字段补 null。
+
+   注意：若被补齐的列在数据库中是 NOT NULL（如 quotes.customer_name），
+   补 null 会触发 23502。此时用 requiredFallbacks 提供的兜底密文值填充。 */
+function _unifyBatchKeys(rows, requiredFallbacks){
+  if (!rows.length) return rows;
+  const allKeys = new Set();
+  for (const r of rows) for (const k of Object.keys(r)) allKeys.add(k);
+  for (const r of rows){
+    for (const k of allKeys){
+      if (!Object.prototype.hasOwnProperty.call(r, k)) {
+        r[k] = (requiredFallbacks && requiredFallbacks[k] !== undefined)
+          ? requiredFallbacks[k]
+          : null;
+      }
+    }
+  }
+  return rows;
+}
 /* quotes / orders 的必填字段兜底（建表时设了 NOT NULL 且默认值 '' 之外的约束） */
 const _PUSH_REQUIRED = {
   quotes: { quote_number: 'QT-UNNAMED', customer_name: '未命名客户' },
@@ -3315,6 +3338,7 @@ async function _pushAllToCloud() {
 
       // 逐条加密 → 清洗 → 组批
       const batch = [];
+      const reqFallbacks = {};   // NOT NULL 列的密文兜底值（供字段并集补齐使用）
       for (const row of active) {
         const clean = Object.fromEntries(
           Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
@@ -3332,10 +3356,14 @@ async function _pushAllToCloud() {
             if (encData[k] === null || encData[k] === undefined || encData[k] === '') {
               encData[k] = await encryptValue(fallback);
             }
+            reqFallbacks[k] = encData[k];
           }
         }
         batch.push(encData);
       }
+
+      /* 批内字段并集：PostgREST 要求同批对象 key 集合完全一致（PGRST-126） */
+      _unifyBatchKeys(batch, reqFallbacks);
 
       // 分批 upsert（批次失败时自动降级为逐条推送，定位并跳过问题记录）
       for (let i = 0; i < batch.length; i += _PUSH_BATCH) {
