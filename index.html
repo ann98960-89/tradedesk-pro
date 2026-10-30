@@ -3685,49 +3685,10 @@ window._tdpRepairPush = async function(){
   return r;
 };
 
-/* recycle.js 需要的 PATCH 等价操作 */
-async function softDelete(table, id, label) {
-  try { await apiDelete(table, id, label); return true; }
-  catch(e) { return false; }
-}
-
-async function restoreRecord(table, id) {
-  try {
-    const rows = _loadTable(table);
-    const idx = rows.findIndex(r => r.id === id);
-    if (idx !== -1) {
-      rows[idx]._deleted = false;
-      rows[idx]._deleted_at = null;
-      rows[idx]._deleted_label = null;
-      rows[idx].updated_at = Date.now();
-      _saveTable(table, rows);
-    }
-    return true;
-  } catch(e) { return false; }
-}
-
-async function permanentDelete(table, id) {
-  try {
-    const rows = _loadTable(table);
-    const filtered = rows.filter(r => r.id !== id);
-    _saveTable(table, filtered);
-    return true;
-  } catch(e) { return false; }
-}
-
-async function updateBadges() {
-  try {
-    const todosData = await apiGet('todos', { limit: 500 });
-    const pending = (todosData.data || []).filter(t => t.status !== '已完成').length;
-    const badge = document.getElementById('todo-badge');
-    if (badge) { badge.textContent = pending; badge.style.display = pending > 0 ? '' : 'none'; }
-  } catch(e) {}
-  if (typeof updateFeedbackBadge === 'function') updateFeedbackBadge();
-}
-function escHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+/* ⚠️ restoreRecord / permanentDelete / updateBadges / escHtml / softDelete 的定义已在上方（约 3411-3468 行），
+   此处曾有一份旧版重复定义，因 JS 后定义覆盖前定义的特性导致新版修复全部失效。
+   旧版使用同步 _loadTable（加密数据返回空数组），会导致恢复假成功、永久删除清空整张表。
+   已删除旧版重复定义，仅保留新版（异步解密 + 云端同步 + 墓碑机制）。 */
 
 /* 初始化由页面底部的登录层JS统一管理 */
 </script>
