@@ -2916,6 +2916,7 @@ function switchDetailTab(tab) {
 
 /* ---------- 配置 ---------- */
 const _STORE_PREFIX = 'tdp_table_';
+const _TOMBSTONE_KEY = 'tdp_tombstones';   // 永久删除记录的 ID 墓碑清单
 const _ALL_TABLES   = ['customers','todos','followups','customer_investigation','product_docs','trial_feedback'];
 
 /* ---------- Supabase 云同步配置 ---------- */
@@ -2925,6 +2926,26 @@ let _sbAvailable = null; // null=未检测 true=可用 false=不可用
 
 /* ---------- 本地存储加密工具 ---------- */
 function _storeKey(t) { return _STORE_PREFIX + t; }
+
+/* ---------- 墓碑清单（永久删除记录的 ID 登记）----------
+   只有过 permanentDelete 的 ID 才会进墓碑 → _pullFromCloud 据此精确跳过。
+   不再靠「云端 _deleted=true 且本地无」这种模糊判断，杜绝误伤正常数据。 */
+function _getTombstones() {
+  try { return JSON.parse(localStorage.getItem(_TOMBSTONE_KEY) || '{}'); }
+  catch(e) { return {}; }
+}
+function _addTombstone(table, id) {
+  const ts = _getTombstones();
+  if (!ts[table]) ts[table] = [];
+  if (!ts[table].includes(id)) ts[table].push(id);
+  // 限制墓碑大小：每表最多 500 条，超出截断旧条目
+  if (ts[table].length > 500) ts[table] = ts[table].slice(-500);
+  localStorage.setItem(_TOMBSTONE_KEY, JSON.stringify(ts));
+}
+function _isTombstoned(table, id) {
+  const ts = _getTombstones();
+  return ts[table] && ts[table].includes(id);
+}
 
 // 用 _cryptoKey 加密 JSON 字符串后存储，防止 DevTools 直接读取
 async function _saveTableEncrypted(table, rows) {
@@ -3109,19 +3130,25 @@ async function _pullFromCloud() {
         if (_hasDecryptFail(r)) { skippedCorrupt++; return; }
         const localRow = map[r.id];
         if (!localRow) {
-          // 云端有此记录但本地没有：如果是 _deleted=true 的幽灵记录（之前已永久删除），
-          // 不拉回来，防止已删数据「复活」
-          if (r._deleted === true) { skippedGhost++; return; }
+          // 本地无此记录：只在墓碑清单里登记过的 ID 才跳过（精确判断，不误伤）
+          if (_isTombstoned(tbl, r.id)) { skippedGhost++; return; }
           map[r.id] = r; return;
         }
-        // 云端有显式版本号时按版本号比较；否则只有当本地记录缺失关键字段时才用云端补全
+        // 版本号优先；无版本号时用 updated_at（毫秒时间戳）比较
         const remoteVer = r._rev || r.version || 0;
         const localVer  = localRow._rev || localRow.version || 0;
         if (remoteVer && localVer) {
           if (remoteVer > localVer) map[r.id] = r;
-        } else if (_hasDecryptFail(localRow)) {
-          // 本地这条已经坏了，用云端的好数据替换
-          map[r.id] = r;
+        } else {
+          const ru = Number(r.updated_at) || 0;
+          const lu = Number(localRow.updated_at) || 0;
+          // 安全约束：云端 _deleted=true 覆盖本地 _deleted=false 时必须 ru > lu
+          // 且本地记录不是已解密失败状态 —— 防止云端旧删除标记覆盖本地正常数据
+          if (ru > lu && !(r._deleted === true && localRow._deleted === false && !hasDecryptFail(localRow))) {
+            map[r.id] = r;
+          } else if (_hasDecryptFail(localRow)) {
+            map[r.id] = r;
+          }
         }
       });
       if (skippedCorrupt) {
@@ -3154,17 +3181,25 @@ async function _pullFromCloud() {
   }
 }
 
-/* 单条记录推送到 Supabase（字段级加密：敏感字段以 ENC: 密文存储在云端）*/
+/* 单条记录推送到 Supabase（字段级加密：敏感字段以 ENC: 密文存储在云端）
+   返回 true=推送成功 / false=失败或离线（调用方可据此提示用户）*/
 async function _pushToCloud(action, table, id, data) {
-  if (!await _checkCloud()) return;
-  if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过云端推送'); return; }
+  if (!await _checkCloud()) return false;
+  if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过云端推送'); return false; }
+  let pushed = false;
   try {
     if (action === 'delete') {
       // 永久删除：云端也真正 DELETE，不留幽灵记录
       await _sbFetch(`${table}?id=eq.${id}`, { method:'DELETE', _prefer:'return=minimal' });
+      pushed = true;
     } else if (action === 'softdelete') {
       // 软删除（平台删除 → 回收站）：仅打标记，可恢复
       await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, _deleted_at:data._deleted_at, updated_at:Date.now()}), _prefer:'return=minimal' });
+      pushed = true;
+    } else if (action === 'restore') {
+      // 恢复（回收站 → 业务页面）：清除删除标记，更新时间戳
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:false, _deleted_at:null, _deleted_label:null, updated_at:data.updated_at||Date.now()}), _prefer:'return=minimal' });
+      pushed = true;
     } else {
       // 过滤掉本地专用字段，然后加密敏感字段
       const clean = Object.fromEntries(
@@ -3197,6 +3232,7 @@ async function _pushToCloud(action, table, id, data) {
         const t = await res.text().catch(()=> '');
         throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`);
       }
+      pushed = true;
     }
     _updateSyncBadge(true);
   } catch(e) {
@@ -3207,8 +3243,13 @@ async function _pushToCloud(action, table, id, data) {
       _updateSyncBadge('missing', table);
     } else {
       console.warn('[TDP] 推送失败（不影响本地）:', e.message, '| table:', table, '| action:', action);
+      // 界面提示：让用户知道同步没成功（本地已改，但云端还旧）
+      if (typeof showToast === 'function') {
+        showToast('⚠️ 云端同步失败（本地已保存），下次登录可能需手动同步', 'error', 5000);
+      }
     }
   }
+  return pushed;
 }
 
 /* 云同步状态角标 */
@@ -3373,13 +3414,30 @@ async function softDelete(table, id, label) {
 
 async function restoreRecord(table, id) {
   try {
-    const rows = await _loadTableDecrypted(table);
-    const idx  = rows.findIndex(r => r.id === id);
-    if (idx !== -1) {
-      rows[idx]._deleted = false; rows[idx]._deleted_at = null; rows[idx]._deleted_label = null; rows[idx].updated_at = Date.now();
-      await _saveTableEncrypted(table, rows);
-      _pushToCloud('patch', table, id, { _deleted:false, _deleted_at:null, _deleted_label:null }).catch(()=>{});
+    let rows = await _loadTableDecrypted(table);
+    let idx  = rows.findIndex(r => r.id === id);
+    // 本地找不到时先从云端拉取补进本地（可能被全量推送或并发写入清掉了）
+    if (idx === -1) {
+      try {
+        const res = await _sbFetch(`${table}?id=eq.${id}&limit=1`);
+        if (res.ok) {
+          const remote = await res.json();
+          if (remote && remote.length > 0) {
+            const r = _cryptoKey ? await decryptObject(remote[0]) : remote[0];
+            rows.push({ ...r, gs_project_id: r.gs_project_id || 'local', gs_table_name: table, _deleted: false });
+            await _saveTableEncrypted(table, rows);
+            idx = rows.length - 1;
+          }
+        }
+      } catch(e) { console.warn('[TDP] 恢复时拉取远端记录失败:', e.message); }
     }
+    if (idx === -1) {
+      console.warn('[TDP] 恢复失败：本地和云端均找不到记录', table, id);
+      return false;
+    }
+    rows[idx]._deleted = false; rows[idx]._deleted_at = null; rows[idx]._deleted_label = null; rows[idx].updated_at = Date.now();
+    await _saveTableEncrypted(table, rows);
+    _pushToCloud('restore', table, id, { _deleted:false, _deleted_at:null, _deleted_label:null, updated_at:rows[idx].updated_at }).catch(()=>{});
     return true;
   } catch(e) { return false; }
 }
@@ -3388,6 +3446,7 @@ async function permanentDelete(table, id) {
   try {
     const rows = await _loadTableDecrypted(table);
     await _saveTableEncrypted(table, rows.filter(r => r.id !== id));
+    _addTombstone(table, id);  // 登记墓碑，_pullFromCloud 据此精确跳过
     _pushToCloud('delete', table, id, null).catch(()=>{});
     return true;
   } catch(e) { return false; }
@@ -5309,19 +5368,46 @@ async function loadRecycleBin() {
     }).join('')}</tbody></table></div>`;
 }
 
+/* 回收站操作后刷新受影响的业务页面 */
+const _RECYCLE_PAGE_LOADERS = {
+  customers: () => typeof loadCustomers === 'function' && loadCustomers(),
+  todos:     () => typeof loadTodos === 'function' && loadTodos(),
+  followups: () => typeof loadFollowups === 'function' && loadFollowups(),
+  customer_investigation: () => typeof loadInvestigations === 'function' && loadInvestigations(),
+  product_docs:           () => typeof loadDocs === 'function' && loadDocs(),
+  trial_feedback:         () => typeof loadFeedbackPage === 'function' && loadFeedbackPage(),
+};
+function _refreshAffectedPages(tables) {
+  const unique = [...new Set(tables)];
+  unique.forEach(t => { if (_RECYCLE_PAGE_LOADERS[t]) _RECYCLE_PAGE_LOADERS[t](); });
+  if (typeof updateBadges === 'function') updateBadges();
+  if (typeof updateRecycleBadge === 'function') updateRecycleBadge();
+}
+
 async function doRestore(table, id, btn) {
   btn.disabled = true; btn.textContent = '⏳';
   const ok = await restoreRecord(table, id);
-  if (ok) { showToast('✅ 已恢复！', 'success'); await loadRecycleBin(); }
-  else { showToast('恢复失败', 'error'); btn.disabled = false; btn.textContent = '↩️ 恢复'; }
+  if (ok) {
+    showToast('✅ 已恢复！', 'success');
+    await loadRecycleBin();
+    _refreshAffectedPages([table]);
+  } else {
+    showToast('恢复失败：记录不存在或网络异常', 'error');
+    btn.disabled = false; btn.textContent = '↩️ 恢复';
+  }
 }
 
 async function doPermDelete(table, id, btn) {
   showConfirm('确定永久删除？此操作无法撤销。', async () => {
     btn.disabled = true;
     const ok = await permanentDelete(table, id);
-    if (ok) { showToast('已永久删除', 'success'); await loadRecycleBin(); }
-    else { showToast('删除失败', 'error'); }
+    if (ok) {
+      showToast('已永久删除', 'success');
+      await loadRecycleBin();
+      _refreshAffectedPages([table]);
+    } else {
+      showToast('删除失败', 'error');
+    }
   });
 }
 
@@ -5336,9 +5422,11 @@ async function confirmClearAll() {
       if (table && id && !allItems.some(x => x.id === id)) allItems.push({ table, id });
     });
     let count = 0;
-    for (const item of allItems) { await permanentDelete(item.table, item.id); count++; }
+    const affectedTables = [];
+    for (const item of allItems) { await permanentDelete(item.table, item.id); count++; affectedTables.push(item.table); }
     showToast(`✅ 已永久清除 ${count} 条记录`, 'success');
     await loadRecycleBin();
+    _refreshAffectedPages(affectedTables);
   });
 }
 
