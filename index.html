@@ -2338,11 +2338,11 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
 </div>
 <div id="detail-overlay" style="display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,0.2);" onclick="closeDetailPanel()"></div>
 
-<!-- ===== 删除确认模态框 ===== -->
+<!-- ===== 通用确认模态框（删除/推进/恢复等共用）===== -->
 <div class="modal-overlay" id="confirm-modal">
   <div class="modal" style="max-width:420px;">
     <div class="modal-header">
-      <div class="modal-title">⚠️ 确认删除</div>
+      <div class="modal-title" id="confirm-title">⚠️ 确认删除</div>
       <button class="btn-close" onclick="closeConfirmModal()">×</button>
     </div>
     <div class="modal-body">
@@ -2350,7 +2350,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeConfirmModal()">取消</button>
-      <button class="btn btn-danger" id="confirm-delete-btn"><i class="fas fa-trash"></i> 确认删除</button>
+      <button class="btn btn-danger" id="confirm-action-btn"><i class="fas fa-trash"></i> 确认删除</button>
     </div>
   </div>
 </div>
@@ -2771,11 +2771,24 @@ function showToast(message, type = 'info', duration = 3000) {
   }, duration);
 }
 
-function showConfirm(message, onConfirm) {
-  document.getElementById('confirm-message').textContent = message;
+/* 通用确认弹窗：支持自定义标题、按钮文案、按钮样式。
+   用法：showConfirm('正文', fn)                          — 默认删除语义
+        showConfirm('正文', fn, {title,confirmText,btnClass,icon}) — 自定义 */
+function showConfirm(message, onConfirm, opts = {}) {
+  const titleEl    = document.getElementById('confirm-title');
+  const msgEl      = document.getElementById('confirm-message');
+  const btnEl      = document.getElementById('confirm-action-btn');
+  msgEl.textContent = message;
+  // 标题：默认"确认删除"
+  titleEl.textContent = opts.title || '确认删除';
+  // 按钮文案和图标：默认"确认删除" + 垃圾桶图标
+  const iconHtml = opts.icon || '<i class="fas fa-trash"></i>';
+  btnEl.innerHTML = iconHtml + ' ' + (opts.confirmText || '确认删除');
+  // 按钮样式：默认 btn-danger，可通过 opts.btnClass 切换
+  btnEl.className = 'btn ' + (opts.btnClass || 'btn-danger');
   pendingDeleteFn = onConfirm;
   document.getElementById('confirm-modal').classList.add('active');
-  document.getElementById('confirm-delete-btn').onclick = () => {
+  btnEl.onclick = () => {
     if (pendingDeleteFn) pendingDeleteFn();
     closeConfirmModal();
   };
@@ -3309,6 +3322,20 @@ const _STATUS_ALIAS = {
   '进行中':'进行中','in-progress':'进行中','in_progress':'进行中','IN-PROGRESS':'进行中','doing':'进行中','处理中':'进行中',
   '已完成':'已完成','completed':'已完成','COMPLETED':'已完成','done':'已完成','完成':'已完成',
 };
+/* 订单状态映射表：订单的 status 走独立的四阶段生命周期，
+   不能套用待办的 待处理/进行中/已完成 映射，否则推进逻辑失效。 */
+const _ORDER_STATUS_ALIAS = {
+  '下单确认':'下单确认','order confirmed':'下单确认','confirmed':'下单确认','pending':'下单确认','待处理':'下单确认',
+  '生产跟进':'生产跟进','production':'生产跟进','in production':'生产跟进','manufacturing':'生产跟进','in-progress':'生产跟进','进行中':'生产跟进',
+  '出货物流':'出货物流','shipping':'出货物流','shipped':'出货物流','logistics':'出货物流','delivery':'出货物流',
+  '回款完成':'回款完成','payment completed':'回款完成','paid':'回款完成','completed':'回款完成','已完成':'回款完成','done':'回款完成',
+};
+function _normOrderStatus(v){
+  if (v === null || v === undefined || v === '') return '下单确认';
+  const s = String(v).trim();
+  if (!s) return '下单确认';
+  return _ORDER_STATUS_ALIAS[s] || _ORDER_STATUS_ALIAS[s.toLowerCase()] || '下单确认';
+}
 function _normPriority(v){
   if (v === null || v === undefined) return '中';
   const s = String(v).trim();
@@ -3327,9 +3354,12 @@ function _normStatus(v){
 function _normalizeRow(table, row){
   if (!row || typeof row !== 'object') return row;
   const r = { ...row };
-  if (table === 'todos' || table === 'orders') {
+  if (table === 'todos') {
     if ('priority' in r) r.priority = _normPriority(r.priority);
     if ('status'   in r) r.status   = _normStatus(r.status);
+  } else if (table === 'orders') {
+    if ('priority' in r) r.priority = _normPriority(r.priority);
+    if ('status'   in r) r.status   = _normOrderStatus(r.status);
   }
   return r;
 }
@@ -5526,7 +5556,7 @@ async function restoreFromCache() {
       showToast(`✅ 已从缓存恢复 ${restored} 条记录`, 'success', 5000);
       closeBackupPanel();
     } catch(e) { showToast('恢复失败：' + e.message, 'error'); }
-  });
+  }, { title: '确认恢复', confirmText: '确认恢复', btnClass: 'btn-success', icon: '<i class="fas fa-undo"></i>' });
 }
 </script>
 
@@ -6967,8 +6997,11 @@ function editOrder(id) {
 async function advanceOrderStatus(id) {
   const o = allOrders.find(o => o.id === id);
   if (!o) return;
-  const curIdx = ORDER_STAGES.indexOf(o.status);
-  if (curIdx >= ORDER_STAGES.length - 1) { showToast('已经是最终状态', 'info'); return; }
+  let curIdx = ORDER_STAGES.indexOf(o.status);
+  // 状态非法或未设置时，视为"未开始"（curIdx=-1），推进到第一阶段
+  if (curIdx < 0) curIdx = -1;
+  // 已是终态（回款完成），不允许继续推进
+  if (curIdx >= ORDER_STAGES.length - 1) { showToast('已经是最终状态「' + ORDER_STAGES[ORDER_STAGES.length-1] + '」', 'info'); return; }
   const nextStatus = ORDER_STAGES[curIdx + 1];
   showConfirm(`确认将订单「${o.order_number}」状态推进到「${nextStatus}」？`, async () => {
     try {
@@ -6980,7 +7013,7 @@ async function advanceOrderStatus(id) {
       await loadOrders();
       if (currentPage === 'dashboard') loadDashboard();
     } catch(e) { showToast('操作失败', 'error'); }
-  });
+  }, { title: '确认推进', confirmText: '确认推进', btnClass: 'btn-success', icon: '<i class="fas fa-arrow-right"></i>' });
 }
 
 function deleteOrder(id) {
