@@ -6584,6 +6584,269 @@ function filterQuotes() {
   renderQuotes();
 }
 
+/* ==== QUOTE_CALC_V2_START ====
+   报价计算内核 v2 —— 成本加成模型
+   ---------------------------------------------------------------
+   全部以人民币（¥）计价，最后按「报价汇率」折算成报价币种。
+
+     EXW 单价 = 出厂价 × (1 + 溢价率 + 暗佣率)
+     EXW 总额 = EXW 单价 × 数量
+     FOB 总额 = EXW 总额 + 杂费总额
+     CIF 总额 = FOB 总额 + 运费总额
+
+   溢价率与暗佣率都是「成本加成率」（分母 = 出厂价），直接相加后一次乘上去。
+   杂费 / 运费支持「总额」与「单价」两种录入模式，内部统一换算成总额。
+   =============================================================== */
+
+/* 条款配置：决定杂费是否计入、运费是否计入、保险费是否出现、加总器显示哪些明细项 */
+const QUOTE_TERMS = {
+  EXW: { hasMisc: false, hasFreight: false, hasInsurance: false, maxTier: 1,
+         miscItems: [] },
+  FCA: { hasMisc: true,  hasFreight: false, hasInsurance: false, maxTier: 2,
+         miscItems: ['内陆运费', '进仓费', '报关费', '其他'] },
+  FOB: { hasMisc: true,  hasFreight: false, hasInsurance: false, maxTier: 2,
+         miscItems: ['内陆运费', '进仓费', '报关费', '码头及货代费', '其他'] },
+  CFR: { hasMisc: true,  hasFreight: true,  hasInsurance: false, maxTier: 3,
+         miscItems: ['内陆运费', '进仓费', '报关费', '码头及货代费', '其他'] },
+  CIF: { hasMisc: true,  hasFreight: true,  hasInsurance: true,  maxTier: 3,
+         miscItems: ['内陆运费', '进仓费', '报关费', '码头及货代费', '保险费', '其他'] }
+};
+
+/* 重量单位集合：只有这些单位能换算 /T 与 /kg */
+const _WEIGHT_UNITS = new Set(['MT', 'T', 'TON', 'KG']);
+
+/* 安全数字转换：任何非法值 → 0 */
+function _qnum(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = parseFloat(v);
+  return isFinite(n) ? n : 0;
+}
+
+/* 取条款配置；未知条款按 FOB 处理（业务中最常用） */
+function _termConf(term) {
+  return QUOTE_TERMS[String(term || '').toUpperCase()] || QUOTE_TERMS.FOB;
+}
+
+/* 币种符号 */
+function _curSym(cur) {
+  const c = String(cur || 'USD').toUpperCase();
+  return c === 'CNY' || c === 'RMB' ? '¥' : c === 'EUR' ? '€' : c === 'GBP' ? '£' : '$';
+}
+
+/* 杂费总额：misc_mode='unit' 时按「每单位杂费 × 数量」换算 */
+function _miscTotal(line) {
+  const qty = _qnum(line.quantity);
+  if (String(line.misc_mode) === 'unit') return _qnum(line.misc_unit) * qty;
+  return _qnum(line.misc_total);
+}
+
+/* 运费总额：freight_mode='unit' 时按「每单位运费 × 数量」换算 */
+function _freightTotal(line) {
+  const qty = _qnum(line.quantity);
+  if (String(line.freight_mode) === 'unit') return _qnum(line.freight_unit) * qty;
+  return _qnum(line.freight_total);
+}
+
+/* 把「人民币总额」换算成三种单价（报价币种）
+   → { total, perUnit, perT, perKg }
+   非重量单位（PC/SET/ROL/COIL/DRUM）的 perT / perKg 返回 null，由界面隐藏 */
+function _unitPrices(totalCny, qty, unit, rate) {
+  const r = (rate && rate > 0) ? rate : 1;
+  const total = totalCny / r;
+  const q = _qnum(qty);
+  const u = String(unit || 'MT').toUpperCase();
+  const perUnit = q > 0 ? total / q : 0;
+  let perT = null, perKg = null;
+  if (u === 'MT' || u === 'T' || u === 'TON') { perT = perUnit; perKg = perUnit / 1000; }
+  else if (u === 'KG') { perKg = perUnit; perT = perUnit * 1000; }
+  return { total, perUnit, perT, perKg };
+}
+
+/* 单行计算 → 完整价格阶梯（人民币金额 + 报价币种单价） */
+function _calcQuoteLine(line, meta) {
+  const m = meta || {};
+  const term = _termConf(m.incoterms);
+  const currency = String(m.currency || 'USD').toUpperCase();
+  const rate = (currency === 'CNY' || currency === 'RMB') ? 1 : (_qnum(m.exchange_rate) || 1);
+
+  const qty      = _qnum(line.quantity);
+  const factory  = _qnum(line.factory_price);
+  const markup   = _qnum(line.markup_rate);
+  const commRate = _qnum(line.commission_rate);
+
+  /* 条款决定杂费 / 运费是否计入（FOB 单里的海运费不应被算进报价） */
+  const miscCny    = term.hasMisc    ? _miscTotal(line)    : 0;
+  const freightCny = term.hasFreight ? _freightTotal(line) : 0;
+
+  const factoryTotal = factory * qty;
+  const markupAmt    = factoryTotal * markup   / 100;
+  const commAmt      = factoryTotal * commRate / 100;
+
+  const exwTotal = factoryTotal + markupAmt + commAmt;
+  const fobTotal = exwTotal + miscCny;
+  const cifTotal = fobTotal + freightCny;
+
+  /* 选定条款对应的报价总额 */
+  const quotedCny = term.maxTier >= 3 ? cifTotal : term.maxTier === 2 ? fobTotal : exwTotal;
+
+  return {
+    qty: qty,
+    unit: line.unit || 'MT',
+    isWeight: _WEIGHT_UNITS.has(String(line.unit || 'MT').toUpperCase()),
+
+    factoryTotal: factoryTotal,
+    markupAmt:    markupAmt,
+    commAmt:      commAmt,
+    miscCny:      miscCny,
+    freightCny:   freightCny,
+
+    exwTotal: exwTotal,
+    fobTotal: fobTotal,
+    cifTotal: cifTotal,
+    quotedCny: quotedCny,
+
+    prices: {
+      exw: _unitPrices(exwTotal, qty, line.unit, rate),
+      fob: _unitPrices(fobTotal, qty, line.unit, rate),
+      cif: _unitPrices(cifTotal, qty, line.unit, rate)
+    },
+    quoted: _unitPrices(quotedCny, qty, line.unit, rate),
+
+    /* 溢价额占最终报价的比例（灰色小字只读参考值，不参与任何计算） */
+    shareOfPrice: quotedCny > 0 ? markupAmt / quotedCny * 100 : 0,
+    maxTier: term.maxTier
+  };
+}
+
+/* 汇总计算 */
+function _calcQuoteSummary(lines, meta) {
+  const m = meta || {};
+  const currency = String(m.currency || 'USD').toUpperCase();
+  const rate = (currency === 'CNY' || currency === 'RMB') ? 1 : (_qnum(m.exchange_rate) || 1);
+
+  const acc = {
+    factoryTotal: 0, markupAmt: 0, commAmt: 0,
+    miscCny: 0, freightCny: 0,
+    exwTotal: 0, fobTotal: 0, cifTotal: 0, quotedCny: 0
+  };
+  const details = [];
+  (lines || []).forEach(function (line) {
+    const r = _calcQuoteLine(line, m);
+    details.push(r);
+    for (const k in acc) acc[k] += (r[k] || 0);
+  });
+
+  /* 加权平均加价率（按出厂成本加权，与用户输入的溢价率口径完全一致） */
+  const avgMarkup = acc.factoryTotal > 0 ? acc.markupAmt / acc.factoryTotal * 100 : 0;
+  const avgComm   = acc.factoryTotal > 0 ? acc.commAmt   / acc.factoryTotal * 100 : 0;
+
+  return {
+    factoryTotal: acc.factoryTotal,
+    markupAmt:    acc.markupAmt,
+    commAmt:      acc.commAmt,
+    miscCny:      acc.miscCny,
+    freightCny:   acc.freightCny,
+    exwTotal:     acc.exwTotal,
+    fobTotal:     acc.fobTotal,
+    cifTotal:     acc.cifTotal,
+    quotedCny:    acc.quotedCny,
+    quoted:       acc.quotedCny / rate,
+    avgMarkup:    avgMarkup,
+    avgComm:      avgComm,
+    shareOfPrice: acc.quotedCny > 0 ? acc.markupAmt / acc.quotedCny * 100 : 0,
+    currency:     currency,
+    rate:         rate,
+    incoterms:    String(m.incoterms || 'FOB').toUpperCase(),
+    maxTier:      _termConf(m.incoterms).maxTier,
+    lineCount:    details.length,
+    details:      details
+  };
+}
+
+/* 从报价单记录中取出计算所需的元信息（汇率、币种、条款） */
+function _quoteMeta(quote) {
+  const q = quote || {};
+  let meta = {};
+  try {
+    const raw = q.items;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) meta = raw.meta || {};
+    else if (typeof raw === 'string') meta = (JSON.parse(raw) || {}).meta || {};
+  } catch (e) { meta = {}; }
+  const currency = String(q.currency || 'USD').toUpperCase();
+  return {
+    currency: currency,
+    incoterms: String(q.incoterms || 'FOB').toUpperCase(),
+    exchange_rate: _qnum(meta.exchange_rate) || (currency === 'CNY' || currency === 'RMB' ? 1 : 0),
+    actual_rate: _qnum(meta.actual_rate) || 0
+  };
+}
+
+/* 从报价单记录中取出明细行数组（兼容 items 为字符串 / 数组 / 新对象三种形态） */
+function _quoteLines(quote) {
+  const q = quote || {};
+  let raw = q.items;
+  try { if (typeof raw === 'string') raw = JSON.parse(raw || '[]'); } catch (e) { raw = []; }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) raw = raw.lines || [];
+  return Array.isArray(raw) ? raw.map(_normQuoteLine) : [];
+}
+
+/* 明细行归一化：补齐新模型字段，并把旧模型（unit_price / unit_cost）反推成出厂价 + 溢价率 */
+function _normQuoteLine(line) {
+  const l = Object.assign({}, line || {});
+  const isLegacy = !('factory_price' in l) && !('markup_rate' in l);
+
+  l.quantity        = _qnum(l.quantity);
+  l.unit            = l.unit || 'MT';
+  l.factory_price   = _qnum(l.factory_price);
+  l.markup_rate     = _qnum(l.markup_rate);
+  l.commission_rate = _qnum(l.commission_rate);
+  l.misc_mode       = (String(l.misc_mode) === 'unit') ? 'unit' : 'total';
+  l.misc_total      = _qnum(l.misc_total);
+  l.misc_unit       = _qnum(l.misc_unit);
+  l.freight_mode    = (String(l.freight_mode) === 'unit') ? 'unit' : 'total';
+  l.freight_total   = _qnum(l.freight_total);
+  l.freight_unit    = _qnum(l.freight_unit);
+
+  if (isLegacy) {
+    const cost  = _qnum(l.unit_cost);
+    const price = _qnum(l.unit_price);
+    l.factory_price = cost;
+    /* 旧模型没有溢价率，只能由「售价 / 成本」反推，保证界面不崩 */
+    if (cost > 0 && price > 0) l.markup_rate = (price / cost - 1) * 100;
+  }
+  return l;
+}
+
+/* 数字格式化（金额，带千分位） */
+function _fmtNum(n, digits) {
+  const d = (digits === undefined) ? 2 : digits;
+  const v = _qnum(n);
+  return v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+/* ==== QUOTE_CALC_V2_END ==== */
+
+/* 控制台自检入口：window._quoteCalc() 用当前打开的报价单做一次完整计算并打印 */
+window._quoteCalc = function (lines, meta) {
+  const l = lines || (window.currentQuoteLines || []);
+  const m = meta || { currency: 'CNY', incoterms: 'CIF', exchange_rate: 1 };
+  const s = _calcQuoteSummary(l, m);
+  console.table(s.details.map(function (d, i) {
+    return {
+      '#': i + 1,
+      'EXW/T': d.prices.exw.perT,
+      'FOB/T': d.prices.fob.perT,
+      'CIF/T': d.prices.cif.perT,
+      'FOB/kg': d.prices.fob.perKg,
+      'CIF/kg': d.prices.cif.perKg,
+      '溢价额': d.markupAmt,
+      '占报价%': d.shareOfPrice
+    };
+  }));
+  console.log('汇总', s);
+  return s;
+};
+
 function openQuoteModal(quote) {
   const isEdit = !!quote;
   document.getElementById('quote-modal-title').textContent = isEdit ? '编辑报价单' : '新建报价单';
