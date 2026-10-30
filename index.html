@@ -1731,9 +1731,9 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
             <th>客户公司</th>
             <th>报价日期</th>
             <th>有效期至</th>
-            <th>币种</th>
-            <th>总金额</th>
-            <th>利润率</th>
+            <th>币种 / 条款</th>
+            <th>报价总额</th>
+            <th>溢价率</th>
             <th>状态</th>
             <th>版本</th>
             <th>操作</th>
@@ -5407,16 +5407,16 @@ async function exportAll() {
 }
 
 function downloadExcel(sheets, filename) {
-  if (typeof XLSX === 'undefined') throw new Error('Excel 库未加载，请检查网络连接后重试');
+  if (typeof XLSX === 'undefined') { showToast('Excel 库未加载，请检查网络连接后重试', 'error'); return; }
   const wb = XLSX.utils.book_new();
   sheets.forEach(({ name, data }) => {
     const ws = XLSX.utils.aoa_to_sheet(data);
-    const colWidths = data[0].map((_, ci) => {
+    const colWidths = (data[0] || []).map((_, ci) => {
       const maxLen = data.reduce((max, row) => { const cell = row[ci]; const len = cell ? String(cell).length : 0; return Math.max(max, len); }, 10);
       return { wch: Math.min(Math.max(maxLen, 10), 50) };
     });
     ws['!cols'] = colWidths;
-    XLSX.utils.book_append_sheet(wb, ws, name);
+    XLSX.utils.book_append_sheet(wb, ws, String(name).slice(0, 31));  // Excel sheet 名上限 31 字符
   });
   XLSX.writeFile(wb, filename);
 }
@@ -6544,13 +6544,29 @@ function renderQuoteStats() {
   const draft = allQuotes.filter(q=>q.status==='草稿').length;
   const sent = allQuotes.filter(q=>q.status==='已发送').length;
   const confirmed = allQuotes.filter(q=>q.status==='已确认').length;
-  const totalAmount = allQuotes.filter(q=>q.status!=='已拒绝'&&q.status!=='已过期').reduce((s,q)=>s+(q.total_amount||0),0);
+
+  /* 多币种不能直接相加：按币种分组，单一币种显示金额，多币种显示币种数量 */
+  const byCur = {};
+  allQuotes.filter(q => q.status !== '已拒绝' && q.status !== '已过期').forEach(q => {
+    const c = String(q.currency || 'USD').toUpperCase();
+    byCur[c] = (byCur[c] || 0) + _qnum(q.total_amount);
+  });
+  const curs = Object.keys(byCur);
+  let amountText;
+  if (curs.length === 0) amountText = '—';
+  else if (curs.length === 1) {
+    const v = byCur[curs[0]];
+    amountText = _curSym(curs[0]) + (v > 9999 ? (v/1000).toFixed(1) + 'K' : v.toLocaleString('en-US', {maximumFractionDigits:0}));
+  } else {
+    amountText = curs.length + ' 种币种';
+  }
+
   const items = [
     {icon:'💰',label:'报价总数',value:total,color:'#1a56db',bg:'#e8f0fe'},
     {icon:'📝',label:'草稿',value:draft,color:'#6b7280',bg:'#f3f4f6'},
     {icon:'📤',label:'已发送',value:sent,color:'#d97706',bg:'#fef3c7'},
     {icon:'✅',label:'已确认',value:confirmed,color:'#059669',bg:'#d1fae5'},
-    {icon:'💵',label:'报价总额',value:'$'+(totalAmount>9999?(totalAmount/1000).toFixed(1)+'K':totalAmount.toLocaleString()),color:'#7c3aed',bg:'#ede9fe'},
+    {icon:'💵',label:curs.length > 1 ? '报价总额(分币种)' : '报价总额',value:amountText,color:'#7c3aed',bg:'#ede9fe'},
   ];
   container.innerHTML = items.map(item=>`<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:12px;min-width:130px;"><div style="width:40px;height:40px;border-radius:10px;background:${item.bg};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">${item.icon}</div><div><div style="font-size:22px;font-weight:800;color:${item.color};">${item.value}</div><div style="font-size:12px;color:#6b7280;">${item.label}</div></div></div>`).join('');
 }
@@ -6569,18 +6585,26 @@ function renderQuotes() {
   const STATUS_CFG = {'草稿':{cls:'badge-gray',icon:'📝'},'已发送':{cls:'badge-primary',icon:'📤'},'已确认':{cls:'badge-success',icon:'✅'},'已拒绝':{cls:'badge-danger',icon:'❌'},'已过期':{cls:'badge-warning',icon:'⏰'}};
   tbody.innerHTML = filteredQuotes.map(q => {
     const sta = STATUS_CFG[q.status] || {cls:'badge-gray',icon:''};
-    const margin = q.total_cost ? (((q.total_amount - q.total_cost) / q.total_amount) * 100).toFixed(1) : '0';
-    const marginColor = parseFloat(margin) >= 20 ? '#059669' : parseFloat(margin) >= 10 ? '#d97706' : '#dc2626';
+    const meta = _quoteMeta(q);
+    const sym  = _curSym(meta.currency);
+
+    /* 溢价率：优先用落库的 margin_rate（加权平均溢价率），缺失时按明细重算 */
+    let markup = _qnum(q.margin_rate);
+    if (!markup && q.items) {
+      try { markup = _calcQuoteSummary(_quoteLines(q), meta).avgMarkup; } catch(e) { markup = 0; }
+    }
+    const markupColor = markup >= 20 ? '#059669' : markup >= 10 ? '#d97706' : '#dc2626';
+
     return `<tr>
-      <td><div style="font-weight:700;color:#111827;">${escHtml(q.quote_number)}</div>${q.version>1?`<span style="font-size:11px;color:#6b7280;">v${q.version}</span>`:''}</td>
+      <td><div style="font-weight:700;color:#111827;">${escHtml(q.quote_number)}</div>${meta.version>1?`<span style="font-size:11px;color:#6b7280;">v${meta.version}</span>`:''}</td>
       <td style="font-weight:600;">${escHtml(q.customer_name)}</td>
       <td>${formatDate(q.quote_date)}</td>
       <td>${q.valid_until?`<span style="color:${isOverdue(formatDateInput(q.valid_until))?'#dc2626':'#374151'};">${formatDate(q.valid_until)}</span>`:'-'}</td>
-      <td>${escHtml(q.currency)||'USD'}</td>
-      <td style="font-weight:700;color:#1a56db;">$${(q.total_amount||0).toLocaleString()}</td>
-      <td style="font-weight:700;color:${marginColor};">${margin}%</td>
+      <td><span style="font-weight:600;">${escHtml(meta.currency)}</span><span style="color:#9ca3af;font-size:11px;"> · ${escHtml(meta.incoterms)}</span></td>
+      <td style="font-weight:700;color:#1a56db;">${sym}${_fmtNum(q.total_amount, 2)}</td>
+      <td style="font-weight:700;color:${markupColor};">${markup.toFixed(2)}%</td>
       <td><span class="badge ${sta.cls}">${sta.icon} ${q.status||'草稿'}</span></td>
-      <td>${q.version>1?'v'+q.version:'v1'}</td>
+      <td>${meta.version>1?'v'+meta.version:'v1'}</td>
       <td onclick="event.stopPropagation()">
         <div class="td-actions">
           <button class="btn btn-ghost btn-sm" onclick="previewQuote('${q.id}')" title="预览" style="color:#1a56db;"><i class="fas fa-eye" style="font-size:11px;"></i></button>
@@ -7220,30 +7244,47 @@ function deleteQuote(id) {
 function previewQuote(id) {
   const q = allQuotes.find(q => q.id === id);
   if (!q) return;
-  let items = [];
-  try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
-  const sym = q.currency === 'CNY' ? '¥' : q.currency === 'EUR' ? '€' : '$';
+
+  /* 客户看到的只有选定条款的对外单价，不含出厂价 / 溢价率 / 暗佣率 / 成本 */
+  const meta  = _quoteMeta(q);
+  const lines = _quoteLines(q);
+  const sum   = _calcQuoteSummary(lines, meta);
+  const sym   = _curSym(meta.currency);
+  const term  = meta.incoterms;
+
+  const INCLUDES = {
+    EXW: '工厂交货价，不含内陆运输、报关、码头及海运费用',
+    FCA: '含内陆运输、进仓及报关费用',
+    FOB: '含内陆运输、进仓、报关、码头及货代费用，不含海运费及保险',
+    CFR: '含内陆运输、报关、码头、货代及海运费，不含保险',
+    CIF: '含内陆运输、报关、码头、货代、海运费及保险费'
+  };
+
   const body = document.getElementById('quote-preview-body');
   body.innerHTML = `
     <div style="padding:20px;font-family:'Inter','PingFang SC',sans-serif;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;border-bottom:2px solid #1a56db;padding-bottom:16px;">
         <div>
           <div style="font-size:22px;font-weight:800;color:#111827;">报价单 Quotation</div>
-          <div style="font-size:13px;color:#6b7280;margin-top:4px;">编号：${escHtml(q.quote_number)} ${q.version>1?'(v'+q.version+')':''}</div>
+          <div style="font-size:13px;color:#6b7280;margin-top:4px;">编号：${escHtml(q.quote_number)} ${meta.version>1?'(v'+meta.version+')':''}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-size:13px;color:#374151;">日期：${formatDate(q.quote_date)}</div>
           <div style="font-size:13px;color:#374151;">有效期至：${formatDate(q.valid_until)}</div>
         </div>
       </div>
-      <div style="display:flex;gap:40px;margin-bottom:20px;">
+      <div style="display:flex;gap:40px;margin-bottom:20px;flex-wrap:wrap;">
         <div>
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">To (客户)</div>
           <div style="font-size:14px;font-weight:700;color:#111827;">${escHtml(q.customer_name)}</div>
         </div>
         <div>
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">贸易条款</div>
-          <div style="font-size:14px;font-weight:600;">${escHtml(q.incoterms||'-')} ${q.origin_port?escHtml(q.origin_port):''}</div>
+          <div style="font-size:14px;font-weight:600;">${escHtml(term)} ${q.origin_port?escHtml(q.origin_port):''}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">币种</div>
+          <div style="font-size:14px;font-weight:600;">${escHtml(meta.currency)}</div>
         </div>
         <div>
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">付款方式</div>
@@ -7257,30 +7298,34 @@ function previewQuote(id) {
           <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">数量</th>
           <th style="padding:10px 12px;text-align:center;border:1px solid #e5e7eb;">单位</th>
           <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">单价(${sym})</th>
-          <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">小计(${sym})</th>
+          <th style="padding:10px 12px;text-align:right;border:1px solid #e5e7eb;">金额(${sym})</th>
         </tr></thead>
         <tbody>
-          ${items.map(it => {
-            const sub = (it.quantity||0) * (it.unit_price||0);
+          ${sum.details.map((d, i) => {
+            const ln = lines[i] || {};
+            const u  = String(d.unit || 'MT').toUpperCase();
+            const sub = (d.quoted.perKg !== null && d.quoted.perKg !== undefined)
+              ? `<div style="font-size:11px;color:#9ca3af;">≈ ${sym}${_fmtNum(u === 'KG' ? d.quoted.perT : d.quoted.perKg, 2)} /${u === 'KG' ? 'T' : 'kg'}</div>`
+              : '';
             return `<tr>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;font-weight:600;">${escHtml(it.product_name)}</td>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;">${escHtml(it.spec||'-')}</td>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">${it.quantity||0}</td>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:center;">${escHtml(it.unit||'')}</td>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">${(it.unit_price||0).toFixed(2)}</td>
-              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${sub.toFixed(2)}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;font-weight:600;">${escHtml(ln.product_name || '')}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;">${escHtml(ln.spec || '-')}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">${_fmtNum(d.qty, d.qty % 1 === 0 ? 0 : 2)}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:center;">${escHtml(u)}</td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;">
+                <div style="font-weight:600;">${_fmtNum(d.quoted.perUnit, 2)}</div>${sub}
+              </td>
+              <td style="padding:9px 12px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${_fmtNum(d.quoted.total, 2)}</td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>
       <div style="display:flex;justify-content:flex-end;margin-top:16px;">
-        <div style="min-width:260px;">
-          ${q.freight?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>运费：</span><span>${sym}${(q.freight||0).toFixed(2)}</span></div>`:''}
-          ${q.insurance?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>保险费：</span><span>${sym}${(q.insurance||0).toFixed(2)}</span></div>`:''}
-          ${q.other_cost?`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;"><span>其他费用：</span><span>${sym}${(q.other_cost||0).toFixed(2)}</span></div>`:''}
-          <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:15px;font-weight:800;color:#1a56db;border-top:2px solid #1a56db;margin-top:6px;">
-            <span>合计 Total：</span><span>${sym}${(q.total_amount||0).toFixed(2)}</span>
+        <div style="min-width:280px;">
+          <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:15px;font-weight:800;color:#1a56db;border-top:2px solid #1a56db;">
+            <span>合计 Total (${escHtml(term)})：</span><span>${sym}${_fmtNum(sum.quoted, 2)}</span>
           </div>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:6px;line-height:1.6;text-align:right;">${escHtml(INCLUDES[term] || '')}</div>
         </div>
       </div>
       ${q.delivery_time?`<div style="margin-top:16px;padding:10px 14px;background:#f0f9ff;border-radius:8px;font-size:13px;color:#0369a1;"><strong>交货周期：</strong>${escHtml(q.delivery_time)}</div>`:''}
@@ -7311,10 +7356,21 @@ async function exportQuotes() {
   const data = await apiGet('quotes', {limit:1000});
   const rows = data.data || [];
   if (!rows.length) { showToast('暂无报价数据', 'warning'); return; }
-  const headers = ['报价单号','客户','日期','有效期','币种','小计','运费','保险','其他','佣金率','总成本','总金额','利润率','状态','版本','贸易条款','付款方式','交货周期','起运港','备注'];
+  const headers = ['报价单号','版本','客户','报价日期','有效期至','币种','贸易条款','报价汇率',
+                   '出厂成本(¥)','溢价率%','溢价额(¥)','暗佣率%','暗佣额(¥)','杂费(¥)','运费(¥)',
+                   '报价总额','状态','付款方式','交货周期','起运港','备注'];
   const sheetData = [headers, ...rows.map(q => {
-    const margin = q.total_amount ? (((q.total_amount - (q.total_cost||0)) / q.total_amount) * 100).toFixed(1) : '0';
-    return [q.quote_number, q.customer_name, formatDate(q.quote_date), formatDate(q.valid_until), q.currency, q.subtotal||0, q.freight||0, q.insurance||0, q.other_cost||0, q.commission_rate||0, q.total_cost||0, q.total_amount||0, margin+'%', q.status, 'v'+(q.version||1), q.incoterms, q.payment_terms, q.delivery_time, q.origin_port, q.notes];
+    const meta = _quoteMeta(q);
+    const s = _calcQuoteSummary(_quoteLines(q), meta);
+    return [
+      q.quote_number, 'v' + (meta.version || 1), q.customer_name,
+      formatDate(q.quote_date), formatDate(q.valid_until),
+      meta.currency, meta.incoterms, meta.exchange_rate || '',
+      s.factoryTotal.toFixed(2), s.avgMarkup.toFixed(2), s.markupAmt.toFixed(2),
+      s.avgComm.toFixed(2), s.commAmt.toFixed(2), s.miscCny.toFixed(2), s.freightCny.toFixed(2),
+      s.quoted.toFixed(2),
+      q.status, q.payment_terms, q.delivery_time, q.origin_port, q.notes
+    ];
   })];
   downloadExcel([{name:'报价管理', data:sheetData}], `报价管理_${todayStr()}.xlsx`);
   showToast(`已导出 ${rows.length} 条报价记录`, 'success');
@@ -7669,18 +7725,9 @@ async function exportOrders() {
   showToast(`已导出 ${rows.length} 条订单记录`, 'success');
 }
 
-function todayStr() { return new Date().toISOString().slice(0,10); }
-
-function downloadExcel(sheets, filename) {
-  if (typeof XLSX === 'undefined') { showToast('Excel 库未加载', 'error'); return; }
-  const wb = XLSX.utils.book_new();
-  sheets.forEach(s => {
-    const ws = XLSX.utils.aoa_to_sheet(s.data);
-    ws['!cols'] = (s.data[0]||[]).map(() => ({wch:18}));
-    XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0,31));
-  });
-  XLSX.writeFile(wb, filename);
-}
+/* ⚠️ todayStr / downloadExcel 的唯一定义在本文件上方的导出模块（约 5409 行）。
+   此处曾有一份重复定义，因 JS 后定义覆盖前定义，导致列宽自适应失效、
+   缺 XLSX 时抛错（未捕获）而非友好提示。已删除重复定义。 */
 </script>
 
 <script>
