@@ -2507,7 +2507,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
         </div>
         <div class="form-group">
           <label class="form-label">贸易条款</label>
-          <select class="form-control" id="quote-incoterms">
+          <select class="form-control" id="quote-incoterms" onchange="onQuoteTermChange()">
             <option value="FOB">FOB</option>
             <option value="CIF">CIF</option>
             <option value="CFR">CFR</option>
@@ -2604,6 +2604,29 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
       <button class="btn btn-secondary" onclick="closeQuoteModal()">取消</button>
       <button class="btn btn-outline" onclick="saveQuote(true)"><i class="fas fa-save"></i> 存为草稿</button>
       <button class="btn btn-primary" onclick="saveQuote(false)"><i class="fas fa-paper-plane"></i> 保存报价</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 杂费明细加总器 ===== -->
+<div class="modal-overlay" id="misc-itemizer-modal" style="z-index:420;">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-header">
+      <div class="modal-title" id="misc-itemizer-title">杂费明细</div>
+      <button class="btn-close" onclick="closeMiscItemizer()">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="misc-itemizer-term" style="font-size:12px;color:#6b7280;line-height:1.6;margin-bottom:14px;padding:10px 12px;background:#f0f9ff;border-radius:8px;"></div>
+      <div id="misc-itemizer-rows"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:1px dashed #d1d5db;">
+        <span style="font-size:13px;font-weight:600;color:#374151;">合计</span>
+        <span id="misc-itemizer-total" style="font-size:18px;font-weight:800;color:#1a56db;">¥0.00</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="clearMiscItems()" style="color:#dc2626;margin-right:auto;">清除明细</button>
+      <button class="btn btn-secondary" onclick="closeMiscItemizer()">取消</button>
+      <button class="btn btn-primary" onclick="applyMiscItems()">应用</button>
     </div>
   </div>
 </div>
@@ -6855,6 +6878,13 @@ function _normQuoteLine(line) {
   l.freight_total   = _qnum(l.freight_total);
   l.freight_unit    = _qnum(l.freight_unit);
 
+  /* 杂费明细（加总器写入）：只保留 {name, amount} 形态，金额非零的项 */
+  l.misc_items = Array.isArray(l.misc_items)
+    ? l.misc_items
+        .filter(function (x) { return x && typeof x === 'object' && _qnum(x.amount) !== 0; })
+        .map(function (x) { return { name: String(x.name || '其他'), amount: _qnum(x.amount) }; })
+    : [];
+
   if (isLegacy) {
     const cost  = _qnum(l.unit_cost);
     const price = _qnum(l.unit_price);
@@ -6941,18 +6971,20 @@ function addQuoteItem(data) {
   if (!tbody) return;
   const tr = document.createElement('tr');
 
-  /* 杂费 / 运费：一个输入框 + 模式切换（总额 / 每单位单价），下方显示换算后的另一个值 */
-  const feeCell = (prefix, val, mode) => `
+  /* 杂费 / 运费：一个输入框 + 模式切换（总额 / 每单位单价），下方显示换算后的另一个值
+     withItems=true 时额外给一条「明细」入口，由加总器写回合计并锁定输入框 */
+  const feeCell = (prefix, val, mode, withItems, locked) => `
     <td style="padding:4px 3px;">
       <div style="display:flex;gap:2px;align-items:center;">
         <input type="number" class="form-control qitem-${prefix}" value="${val === 0 ? '' : val}" placeholder="0" step="any"
-               style="font-size:12px;padding:5px 4px;text-align:right;min-width:0;" oninput="calcQuoteTotal()">
-        <select class="form-control qitem-${prefix}-mode" style="font-size:10px;padding:4px 0;width:44px;flex:none;" onchange="calcQuoteTotal()">
+               ${locked ? 'readonly' : ''} style="font-size:12px;padding:5px 4px;text-align:right;min-width:0;${locked ? 'background:#f9fafb;' : ''}" oninput="calcQuoteTotal()">
+        <select class="form-control qitem-${prefix}-mode" style="font-size:10px;padding:4px 0;width:44px;flex:none;" ${locked ? 'disabled' : ''} onchange="calcQuoteTotal()">
           <option value="total"${mode === 'total' ? ' selected' : ''}>总额</option>
           <option value="unit"${mode === 'unit' ? ' selected' : ''}>单价</option>
         </select>
       </div>
       <div class="qitem-${prefix}-hint" style="font-size:10px;color:#9ca3af;margin-top:2px;text-align:right;white-space:nowrap;"></div>
+      ${withItems ? `<div class="qitem-${prefix}-link" style="font-size:10px;margin-top:1px;text-align:right;white-space:nowrap;cursor:pointer;" onclick="openMiscItemizer(this)"></div>` : ''}
     </td>`;
 
   tr.innerHTML = `
@@ -6965,19 +6997,31 @@ function addQuoteItem(data) {
     <td style="padding:4px 3px;"><input type="number" class="form-control qitem-factory" value="${d.factory_price === 0 ? '' : d.factory_price}" placeholder="0.00" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
     <td style="padding:4px 3px;"><input type="number" class="form-control qitem-markup" value="${d.markup_rate === 0 ? '' : d.markup_rate}" placeholder="0" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
     <td style="padding:4px 3px;"><input type="number" class="form-control qitem-comm" value="${d.commission_rate === 0 ? '' : d.commission_rate}" placeholder="0" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
-    ${feeCell('misc',    d.misc_mode === 'unit' ? d.misc_unit : d.misc_total,       d.misc_mode)}
-    ${feeCell('freight', d.freight_mode === 'unit' ? d.freight_unit : d.freight_total, d.freight_mode)}
+    ${feeCell('misc',    d.misc_mode === 'unit' ? d.misc_unit : d.misc_total,       d.misc_mode, true, d.misc_items.length > 0)}
+    ${feeCell('freight', d.freight_mode === 'unit' ? d.freight_unit : d.freight_total, d.freight_mode, false, false)}
     <td class="qitem-exw" style="padding:5px 6px;"></td>
     <td class="qitem-fob" style="padding:5px 6px;"></td>
     <td class="qitem-cif" style="padding:5px 6px;"></td>
     <td style="padding:4px 2px;text-align:center;"><button class="btn btn-ghost btn-sm" onclick="this.closest('tr').remove();calcQuoteTotal();" style="color:#dc2626;padding:2px;" title="删除本行"><i class="fas fa-times" style="font-size:11px;"></i></button></td>
   `;
 
+  /* 杂费明细挂在 tr 上，随行一起存在/删除，读行时由 _readQuoteLinesFromUI 取出 */
+  tr._miscItems = d.misc_items.slice();
+
   const unitSel = tr.querySelector('.qitem-unit');
   if (unitSel) unitSel.value = String(d.unit || 'MT').toUpperCase();
 
   tbody.appendChild(tr);
   calcQuoteTotal();
+}
+
+/* 杂费单元格里的「明细」入口文案 */
+function _miscLinkHtml(tr) {
+  const items = (tr && tr._miscItems) ? tr._miscItems : [];
+  const n = items.filter(function (x) { return _qnum(x.amount) !== 0; }).length;
+  return n
+    ? '<span style="color:#1a56db;">📋 ' + n + ' 项明细</span>'
+    : '<span style="color:#9ca3af;">＋ 加明细</span>';
 }
 
 /* 读取表头的报价元信息（币种 / 条款 / 汇率） */
@@ -7027,7 +7071,8 @@ function _readQuoteLinesFromUI() {
       misc_unit:       misc.unit,
       freight_mode:    frt.mode,
       freight_total:   frt.total,
-      freight_unit:    frt.unit
+      freight_unit:    frt.unit,
+      misc_items:      Array.isArray(tr._miscItems) ? tr._miscItems.slice() : []
     }));
   });
   return lines;
@@ -7136,10 +7181,143 @@ function calcQuoteTotal() {
     if (fHint) fHint.textContent = (frt.mode === 'unit')
       ? '合 ¥' + _fmtNum(frt.total, 2)
       : (d.qty > 0 ? '¥' + _fmtNum(frt.unit, 2) + '/单位' : '');
+
+    /* 杂费明细入口文案 */
+    const mLink = tr.querySelector('.qitem-misc-link');
+    if (mLink) mLink.innerHTML = _miscLinkHtml(tr);
   });
 
   _paintQuoteSummary(sum, meta);
   return sum;
+}
+
+/* ---------- 杂费明细加总器 ----------
+   按当前贸易条款自动切换费用项，填写后合计写回「杂费」栏并锁定输入框，
+   明细存进该行的 misc_items，随报价单一起落库，日后可追溯构成。 */
+let _miscItemizerTr   = null;
+let _miscItemizerRows = [];
+
+function openMiscItemizer(linkEl) {
+  const tr = linkEl && linkEl.closest ? linkEl.closest('tr') : null;
+  if (!tr) return;
+
+  const term = String((document.getElementById('quote-incoterms') || {}).value || 'FOB').toUpperCase();
+  const conf = _termConf(term);
+  if (!conf.hasMisc) {
+    showToast(term + ' 条款不产生杂费，无需填写明细', 'info');
+    return;
+  }
+
+  /* 已有明细按名称合并到当前条款的标准清单里（换条款后不适用的项自动丢弃） */
+  const existing = {};
+  (tr._miscItems || []).forEach(function (x) { existing[String(x.name || '')] = _qnum(x.amount); });
+  const rows = conf.miscItems.map(function (name) {
+    return { name: name, amount: existing[name] || 0 };
+  });
+
+  _miscItemizerTr = tr;
+  _miscItemizerRows = rows;
+
+  const termEl = document.getElementById('misc-itemizer-term');
+  if (termEl) {
+    termEl.innerHTML = '当前条款 <strong style="color:#0369a1;">' + escHtml(term) + '</strong>'
+      + ' — 明细项按条款自动切换，合计会写回该行「杂费」栏。';
+  }
+  const box = document.getElementById('misc-itemizer-rows');
+  if (box) {
+    box.innerHTML = rows.map(function (r, i) {
+      return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px;">'
+        + '<div style="flex:1;font-size:13px;color:#374151;">' + escHtml(r.name) + '</div>'
+        + '<input type="number" class="form-control mi-amount" data-idx="' + i + '" value="' + (r.amount ? r.amount : '') + '"'
+        + ' placeholder="0.00" step="any" style="width:140px;font-size:13px;text-align:right;" oninput="recalcMiscItemizer()">'
+        + '</div>';
+    }).join('');
+  }
+  recalcMiscItemizer();
+  document.getElementById('misc-itemizer-modal').classList.add('active');
+}
+
+function recalcMiscItemizer() {
+  let total = 0;
+  document.querySelectorAll('#misc-itemizer-rows .mi-amount').forEach(function (inp) {
+    total += _qnum(inp.value);
+  });
+  const el = document.getElementById('misc-itemizer-total');
+  if (el) el.textContent = '¥' + _fmtNum(total, 2);
+  return total;
+}
+
+function applyMiscItems() {
+  const tr = _miscItemizerTr;
+  if (!tr) return;
+
+  const items = [];
+  document.querySelectorAll('#misc-itemizer-rows .mi-amount').forEach(function (inp, i) {
+    const row = _miscItemizerRows[i];
+    const amt = _qnum(inp.value);
+    if (row && amt !== 0) items.push({ name: row.name, amount: amt });
+  });
+  const total = items.reduce(function (s, x) { return s + x.amount; }, 0);
+
+  tr._miscItems = items;
+
+  const inp = tr.querySelector('.qitem-misc');
+  const modeSel = tr.querySelector('.qitem-misc-mode');
+  if (inp) {
+    inp.value = total ? total : '';
+    inp.readOnly = items.length > 0;
+    inp.style.background = items.length ? '#f9fafb' : '';
+  }
+  if (modeSel) {
+    modeSel.value = 'total';
+    modeSel.disabled = items.length > 0;
+  }
+
+  closeMiscItemizer();
+  calcQuoteTotal();
+  showToast(items.length
+    ? '杂费明细已应用，合计 ¥' + _fmtNum(total, 2)
+    : '未填写金额，杂费已清空', items.length ? 'success' : 'info');
+}
+
+function clearMiscItems() {
+  const tr = _miscItemizerTr;
+  if (!tr) return;
+  tr._miscItems = [];
+  const inp = tr.querySelector('.qitem-misc');
+  const modeSel = tr.querySelector('.qitem-misc-mode');
+  if (inp) { inp.value = ''; inp.readOnly = false; inp.style.background = ''; }
+  if (modeSel) { modeSel.value = 'total'; modeSel.disabled = false; }
+  closeMiscItemizer();
+  calcQuoteTotal();
+  showToast('已清除该行杂费明细，可手工填写', 'info');
+}
+
+function closeMiscItemizer() {
+  const m = document.getElementById('misc-itemizer-modal');
+  if (m) m.classList.remove('active');
+  _miscItemizerTr = null;
+}
+
+/* 切换贸易条款：重算价格，并提示哪些行的杂费明细已不适用于新条款 */
+function onQuoteTermChange() {
+  const term = String((document.getElementById('quote-incoterms') || {}).value || 'FOB').toUpperCase();
+  const conf = _termConf(term);
+  const stale = [];
+
+  document.querySelectorAll('#quote-items-tbody tr').forEach(function (tr, i) {
+    (tr._miscItems || []).forEach(function (x) {
+      if (conf.miscItems.indexOf(String(x.name)) < 0) {
+        stale.push('第 ' + (i + 1) + ' 行「' + x.name + '」');
+      }
+    });
+  });
+
+  calcQuoteTotal();
+
+  if (stale.length) {
+    showToast('条款已改为 ' + term + '，' + stale.join('、') + ' 不再适用，请打开该行杂费明细确认', 'warning', 6000);
+  }
 }
 
 /* ==== QUOTE_UI_V4_END ==== */
