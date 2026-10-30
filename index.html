@@ -2442,7 +2442,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
 
 <!-- ===== 报价管理模态框 ===== -->
 <div class="modal-overlay" id="quote-modal">
-  <div class="modal modal-lg" style="max-width:900px;">
+  <div class="modal modal-lg" style="max-width:1200px;width:96vw;">
     <div class="modal-header">
       <div class="modal-title" id="quote-modal-title">新建报价单</div>
       <button class="btn-close" onclick="closeQuoteModal()">x</button>
@@ -2469,11 +2469,19 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
         </div>
         <div class="form-group">
           <label class="form-label">币种</label>
-          <select class="form-control" id="quote-currency">
+          <select class="form-control" id="quote-currency" onchange="onQuoteCurrencyChange()">
             <option value="USD">USD</option>
             <option value="EUR">EUR</option>
             <option value="CNY">CNY</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">报价汇率 <span style="font-weight:400;color:#9ca3af;font-size:11px;">(¥ / 报价币种)</span></label>
+          <input type="number" class="form-control" id="quote-exchange-rate" placeholder="例如 6.55" step="0.0001" oninput="calcQuoteTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">实际汇率 <span style="font-weight:400;color:#9ca3af;font-size:11px;">(仅参考，不参与计算)</span></label>
+          <input type="number" class="form-control" id="quote-actual-rate" placeholder="例如 6.60" step="0.0001" oninput="calcQuoteTotal()">
         </div>
         <div class="form-group">
           <label class="form-label">状态</label>
@@ -2523,57 +2531,71 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
           <div style="font-size:13px;font-weight:700;color:#374151;">报价明细</div>
           <button class="btn btn-sm btn-secondary" onclick="addQuoteItem()"><i class="fas fa-plus"></i> 添加行</button>
         </div>
-        <div class="table-wrapper">
-          <table style="font-size:12.5px;">
+        <div class="table-wrapper" style="overflow-x:auto;">
+          <table style="font-size:12px;min-width:1120px;">
             <thead>
               <tr>
-                <th style="min-width:160px;">产品名称</th>
-                <th style="min-width:80px;">规格</th>
-                <th style="width:70px;">数量</th>
-                <th style="width:80px;">单位</th>
-                <th style="width:100px;">单价</th>
-                <th style="width:100px;">成本</th>
-                <th style="width:90px;">小计</th>
-                <th style="width:50px;"></th>
+                <th style="min-width:128px;">产品名称</th>
+                <th style="min-width:64px;">规格</th>
+                <th style="width:68px;">数量</th>
+                <th style="width:64px;">单位</th>
+                <th style="width:92px;">出厂价 ¥</th>
+                <th style="width:68px;">溢价率 %</th>
+                <th style="width:68px;">暗佣率 %</th>
+                <th style="width:112px;">杂费</th>
+                <th style="width:112px;">运费</th>
+                <th style="width:100px;">EXW 价</th>
+                <th style="width:100px;">FOB 价</th>
+                <th style="width:100px;">CIF 价</th>
+                <th style="width:34px;"></th>
               </tr>
             </thead>
             <tbody id="quote-items-tbody"></tbody>
-            <tfoot>
-              <tr style="background:#f9fafb;font-weight:700;">
-                <td colspan="6" style="text-align:right;padding:10px 14px;">合计：</td>
-                <td id="quote-total" style="font-size:14px;color:#1a56db;font-weight:800;">$0.00</td>
-                <td></td>
-              </tr>
-              <tr style="background:#f0fdf4;font-weight:600;">
-                <td colspan="5" style="text-align:right;padding:8px 14px;color:#059669;">总成本：</td>
-                <td id="quote-total-cost" style="color:#059669;">$0.00</td>
-                <td colspan="2" style="color:#059669;font-size:12px;">利润率：<span id="quote-margin">0%</span></td>
-              </tr>
-            </tfoot>
           </table>
         </div>
-      </div>
-
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">运费</label>
-          <input type="number" class="form-control" id="quote-freight" placeholder="0" oninput="calcQuoteTotal()">
-        </div>
-        <div class="form-group">
-          <label class="form-label">保险费</label>
-          <input type="number" class="form-control" id="quote-insurance" placeholder="0" oninput="calcQuoteTotal()">
-        </div>
-        <div class="form-group">
-          <label class="form-label">其他费用</label>
-          <input type="number" class="form-control" id="quote-other-cost" placeholder="0" oninput="calcQuoteTotal()">
-        </div>
-        <div class="form-group">
-          <label class="form-label">佣金 (%)</label>
-          <input type="number" class="form-control" id="quote-commission" placeholder="0" step="0.5" oninput="calcQuoteTotal()">
+        <div style="margin-top:6px;font-size:11px;color:#9ca3af;line-height:1.6;">
+          出厂价按人民币填写；杂费与运费可切「总额 / 单价」两种录入方式，单价指每单位分摊额。价格档位按当前贸易条款自动显示。
         </div>
       </div>
 
-      <div class="form-group">
+      <div id="quote-summary" style="margin-top:6px;padding:14px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px 18px;font-size:12.5px;">
+          <div>
+            <div style="color:#6b7280;font-size:11px;">出厂成本合计</div>
+            <div id="quote-sum-factory" style="font-weight:700;color:#111827;">¥0.00</div>
+          </div>
+          <div>
+            <div style="color:#6b7280;font-size:11px;">溢价合计 <span id="quote-sum-markup-rate" style="color:#9ca3af;">(0%)</span></div>
+            <div id="quote-sum-markup" style="font-weight:700;color:#059669;">¥0.00</div>
+          </div>
+          <div>
+            <div style="color:#6b7280;font-size:11px;">暗佣合计 <span id="quote-sum-comm-rate" style="color:#9ca3af;">(0%)</span></div>
+            <div id="quote-sum-comm" style="font-weight:700;color:#b45309;">¥0.00</div>
+          </div>
+          <div>
+            <div style="color:#6b7280;font-size:11px;">杂费合计</div>
+            <div id="quote-sum-misc" style="font-weight:700;color:#111827;">¥0.00</div>
+          </div>
+          <div>
+            <div style="color:#6b7280;font-size:11px;">运费合计</div>
+            <div id="quote-sum-freight" style="font-weight:700;color:#111827;">¥0.00</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px dashed #d1d5db;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div style="color:#6b7280;font-size:11px;">报价合计 <span id="quote-sum-total-label" style="color:#1a56db;font-weight:600;">(FOB)</span></div>
+            <div id="quote-sum-total" style="font-size:22px;font-weight:800;color:#1a56db;line-height:1.2;">$0.00</div>
+            <div style="font-size:10.5px;color:#9ca3af;margin-top:2px;">
+              溢价占报价 <span id="quote-sum-share">0.00%</span>
+              <span style="color:#d1d5db;">|</span>
+              成本口径 ¥<span id="quote-sum-cost">0.00</span>
+            </div>
+          </div>
+          <div id="quote-sum-rate-note" style="font-size:11px;color:#6b7280;text-align:right;line-height:1.6;"></div>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:14px;">
         <label class="form-label">备注 / 条款</label>
         <textarea class="form-control" id="quote-notes" rows="3" placeholder="报价说明、特殊条款、包装要求等..."></textarea>
       </div>
@@ -6777,7 +6799,9 @@ function _quoteMeta(quote) {
     currency: currency,
     incoterms: String(q.incoterms || 'FOB').toUpperCase(),
     exchange_rate: _qnum(meta.exchange_rate) || (currency === 'CNY' || currency === 'RMB' ? 1 : 0),
-    actual_rate: _qnum(meta.actual_rate) || 0
+    actual_rate: _qnum(meta.actual_rate) || 0,
+    /* 数据库无 version 列，版本号存进 items.meta.version（旧记录回退到 q.version） */
+    version: _qnum(meta.version) || _qnum(q.version) || 1
   };
 }
 
@@ -6847,34 +6871,38 @@ window._quoteCalc = function (lines, meta) {
   return s;
 };
 
+/* ==== QUOTE_UI_V4_START ==== */
 function openQuoteModal(quote) {
   const isEdit = !!quote;
+  const meta = quote ? _quoteMeta(quote) : { currency: 'USD', incoterms: 'FOB', exchange_rate: 0, actual_rate: 0, version: 1 };
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+
   document.getElementById('quote-modal-title').textContent = isEdit ? '编辑报价单' : '新建报价单';
-  document.getElementById('quote-id').value = quote?.id || '';
-  document.getElementById('quote-version').value = quote?.version || 1;
-  document.getElementById('quote-number').value = quote?.quote_number || generateQuoteNumber();
-  document.getElementById('quote-customer').value = quote?.customer_name || '';
-  document.getElementById('quote-date').value = quote?.quote_date ? formatDateInput(quote.quote_date) : new Date().toISOString().slice(0,10);
-  const validDate = new Date(); validDate.setDate(validDate.getDate()+30);
-  document.getElementById('quote-valid-until').value = quote?.valid_until ? formatDateInput(quote.valid_until) : validDate.toISOString().slice(0,10);
-  document.getElementById('quote-currency').value = quote?.currency || 'USD';
-  document.getElementById('quote-status').value = quote?.status || '草稿';
-  document.getElementById('quote-payment-terms').value = quote?.payment_terms || 'T/T 30% deposit, 70% before shipment';
-  document.getElementById('quote-incoterms').value = quote?.incoterms || 'FOB';
-  document.getElementById('quote-delivery').value = quote?.delivery_time || '';
-  document.getElementById('quote-origin').value = quote?.origin_port || '';
-  document.getElementById('quote-freight').value = quote?.freight || '';
-  document.getElementById('quote-insurance').value = quote?.insurance || '';
-  document.getElementById('quote-other-cost').value = quote?.other_cost || '';
-  document.getElementById('quote-commission').value = quote?.commission_rate || '';
-  document.getElementById('quote-notes').value = quote?.notes || '';
+  setVal('quote-id', quote?.id || '');
+  setVal('quote-version', meta.version || 1);
+  setVal('quote-number', quote?.quote_number || generateQuoteNumber());
+  setVal('quote-customer', quote?.customer_name || '');
+  setVal('quote-date', quote?.quote_date ? formatDateInput(quote.quote_date) : new Date().toISOString().slice(0, 10));
+  const validDate = new Date(); validDate.setDate(validDate.getDate() + 30);
+  setVal('quote-valid-until', quote?.valid_until ? formatDateInput(quote.valid_until) : validDate.toISOString().slice(0, 10));
+  setVal('quote-currency', meta.currency || 'USD');
+  setVal('quote-status', quote?.status || '草稿');
+  setVal('quote-payment-terms', quote?.payment_terms || 'T/T 30% deposit, 70% before shipment');
+  setVal('quote-incoterms', meta.incoterms || 'FOB');
+  setVal('quote-delivery', quote?.delivery_time || '');
+  setVal('quote-origin', quote?.origin_port || '');
+  setVal('quote-exchange-rate', meta.exchange_rate || '');
+  setVal('quote-actual-rate', meta.actual_rate || '');
+  setVal('quote-notes', quote?.notes || '');
+
+  /* 明细行：优先用 items.lines，兼容旧数组形态 */
   const tbody = document.getElementById('quote-items-tbody');
-  tbody.innerHTML = '';
-  if (quote?.items && quote.items.length) {
-    quote.items.forEach(item => addQuoteItem(item));
-  } else {
-    addQuoteItem();
-  }
+  if (tbody) tbody.innerHTML = '';
+  const lines = quote ? _quoteLines(quote) : [];
+  if (lines.length) lines.forEach(function (l) { addQuoteItem(l); });
+  else addQuoteItem();
+
+  onQuoteCurrencyChange();   /* 处理 CNY 时锁定汇率 */
   calcQuoteTotal();
   document.getElementById('quote-modal').classList.add('active');
 }
@@ -6884,93 +6912,270 @@ function closeQuoteModal() {
 }
 
 function addQuoteItem(data) {
+  const d = _normQuoteLine(data || {});
   const tbody = document.getElementById('quote-items-tbody');
+  if (!tbody) return;
   const tr = document.createElement('tr');
+
+  /* 杂费 / 运费：一个输入框 + 模式切换（总额 / 每单位单价），下方显示换算后的另一个值 */
+  const feeCell = (prefix, val, mode) => `
+    <td style="padding:4px 3px;">
+      <div style="display:flex;gap:2px;align-items:center;">
+        <input type="number" class="form-control qitem-${prefix}" value="${val === 0 ? '' : val}" placeholder="0" step="any"
+               style="font-size:12px;padding:5px 4px;text-align:right;min-width:0;" oninput="calcQuoteTotal()">
+        <select class="form-control qitem-${prefix}-mode" style="font-size:10px;padding:4px 0;width:44px;flex:none;" onchange="calcQuoteTotal()">
+          <option value="total"${mode === 'total' ? ' selected' : ''}>总额</option>
+          <option value="unit"${mode === 'unit' ? ' selected' : ''}>单价</option>
+        </select>
+      </div>
+      <div class="qitem-${prefix}-hint" style="font-size:10px;color:#9ca3af;margin-top:2px;text-align:right;white-space:nowrap;"></div>
+    </td>`;
+
   tr.innerHTML = `
-    <td><input type="text" class="form-control qitem-name" value="${data?.product_name||''}" placeholder="产品名称" style="font-size:12px;padding:6px 8px;"></td>
-    <td><input type="text" class="form-control qitem-spec" value="${data?.spec||''}" placeholder="规格" style="font-size:12px;padding:6px 8px;"></td>
-    <td><input type="number" class="form-control qitem-qty" value="${data?.quantity||''}" placeholder="0" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
-    <td><select class="form-control qitem-unit" style="font-size:12px;padding:6px 8px;"><option>MT</option><option>KG</option><option>PC</option><option>SET</option><option>ROL</option><option>COIL</option><option>DRUM</option></select></td>
-    <td><input type="number" class="form-control qitem-price" value="${data?.unit_price||''}" placeholder="0.00" step="0.01" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
-    <td><input type="number" class="form-control qitem-cost" value="${data?.unit_cost||''}" placeholder="0.00" step="0.01" style="font-size:12px;padding:6px 8px;" oninput="calcQuoteTotal()"></td>
-    <td class="qitem-subtotal" style="font-weight:700;color:#1a56db;padding:6px 8px;">$0.00</td>
-    <td><button class="btn btn-ghost btn-sm" onclick="this.closest('tr').remove();calcQuoteTotal();" style="color:#dc2626;padding:2px;"><i class="fas fa-times" style="font-size:11px;"></i></button></td>
+    <td style="padding:4px 3px;"><input type="text" class="form-control qitem-name" value="${escHtml(d.product_name)}" placeholder="产品名称" style="font-size:12px;padding:5px 5px;"></td>
+    <td style="padding:4px 3px;"><input type="text" class="form-control qitem-spec" value="${escHtml(d.spec)}" placeholder="规格" style="font-size:12px;padding:5px 5px;"></td>
+    <td style="padding:4px 3px;"><input type="number" class="form-control qitem-qty" value="${d.quantity === 0 ? '' : d.quantity}" placeholder="0" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
+    <td style="padding:4px 3px;"><select class="form-control qitem-unit" style="font-size:12px;padding:5px 1px;" onchange="calcQuoteTotal()">
+      <option value="MT">MT</option><option value="KG">KG</option><option value="PC">PC</option><option value="SET">SET</option>
+    </select></td>
+    <td style="padding:4px 3px;"><input type="number" class="form-control qitem-factory" value="${d.factory_price === 0 ? '' : d.factory_price}" placeholder="0.00" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
+    <td style="padding:4px 3px;"><input type="number" class="form-control qitem-markup" value="${d.markup_rate === 0 ? '' : d.markup_rate}" placeholder="0" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
+    <td style="padding:4px 3px;"><input type="number" class="form-control qitem-comm" value="${d.commission_rate === 0 ? '' : d.commission_rate}" placeholder="0" step="any" style="font-size:12px;padding:5px 4px;text-align:right;" oninput="calcQuoteTotal()"></td>
+    ${feeCell('misc',    d.misc_mode === 'unit' ? d.misc_unit : d.misc_total,       d.misc_mode)}
+    ${feeCell('freight', d.freight_mode === 'unit' ? d.freight_unit : d.freight_total, d.freight_mode)}
+    <td class="qitem-exw" style="padding:5px 6px;"></td>
+    <td class="qitem-fob" style="padding:5px 6px;"></td>
+    <td class="qitem-cif" style="padding:5px 6px;"></td>
+    <td style="padding:4px 2px;text-align:center;"><button class="btn btn-ghost btn-sm" onclick="this.closest('tr').remove();calcQuoteTotal();" style="color:#dc2626;padding:2px;" title="删除本行"><i class="fas fa-times" style="font-size:11px;"></i></button></td>
   `;
-  if (data?.unit) { tr.querySelector('.qitem-unit').value = data.unit; }
+
+  const unitSel = tr.querySelector('.qitem-unit');
+  if (unitSel) unitSel.value = String(d.unit || 'MT').toUpperCase();
+
   tbody.appendChild(tr);
   calcQuoteTotal();
 }
 
-function calcQuoteTotal() {
-  let subtotal = 0, totalCost = 0;
-  document.querySelectorAll('#quote-items-tbody tr').forEach(tr => {
-    const qty = parseFloat(tr.querySelector('.qitem-qty').value) || 0;
-    const price = parseFloat(tr.querySelector('.qitem-price').value) || 0;
-    const cost = parseFloat(tr.querySelector('.qitem-cost').value) || 0;
-    const sub = qty * price;
-    const lineCost = qty * cost;
-    subtotal += sub;
-    totalCost += lineCost;
-    tr.querySelector('.qitem-subtotal').textContent = '$' + sub.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-  });
-  const freight = parseFloat(document.getElementById('quote-freight').value) || 0;
-  const insurance = parseFloat(document.getElementById('quote-insurance').value) || 0;
-  const otherCost = parseFloat(document.getElementById('quote-other-cost').value) || 0;
-  const commissionRate = parseFloat(document.getElementById('quote-commission').value) || 0;
-  const commission = subtotal * commissionRate / 100;
-  const total = subtotal + freight + insurance + otherCost + commission;
-  const currency = document.getElementById('quote-currency').value || 'USD';
-  const sym = currency === 'CNY' ? '¥' : currency === 'EUR' ? '€' : '$';
-  document.getElementById('quote-total').textContent = sym + total.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-  document.getElementById('quote-total-cost').textContent = sym + totalCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-  const margin = total > 0 ? ((total - totalCost) / total * 100).toFixed(1) : '0';
-  document.getElementById('quote-margin').textContent = margin + '%';
-  document.getElementById('quote-margin').style.color = parseFloat(margin) >= 20 ? '#059669' : parseFloat(margin) >= 10 ? '#d97706' : '#dc2626';
+/* 读取表头的报价元信息（币种 / 条款 / 汇率） */
+function _readQuoteMetaFromUI() {
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const currency = String(val('quote-currency') || 'USD').toUpperCase();
+  return {
+    currency: currency,
+    incoterms: String(val('quote-incoterms') || 'FOB').toUpperCase(),
+    exchange_rate: currency === 'CNY' ? 1 : _qnum(val('quote-exchange-rate')),
+    actual_rate: _qnum(val('quote-actual-rate'))
+  };
 }
+
+/* 读取一个费用单元格（杂费 / 运费）：返回 {mode, input, total, unit} */
+function _readFeeCell(tr, prefix) {
+  const inp  = tr.querySelector('.qitem-' + prefix);
+  const modeEl = tr.querySelector('.qitem-' + prefix + '-mode');
+  const qtyEl  = tr.querySelector('.qitem-qty');
+  const qty  = _qnum(qtyEl ? qtyEl.value : 0);
+  const v    = _qnum(inp ? inp.value : 0);
+  const mode = (modeEl && modeEl.value === 'unit') ? 'unit' : 'total';
+  const total = mode === 'unit' ? v * qty : v;
+  const unit  = mode === 'unit' ? v : (qty > 0 ? v / qty : 0);
+  return { mode: mode, input: v, total: total, unit: unit };
+}
+
+/* 从明细表读取全部行 → 归一化后的行数组（供计算与保存共用） */
+function _readQuoteLinesFromUI() {
+  const lines = [];
+  document.querySelectorAll('#quote-items-tbody tr').forEach(function (tr) {
+    const txt = sel => { const el = tr.querySelector(sel); return el ? el.value.trim() : ''; };
+    const num = sel => { const el = tr.querySelector(sel); return el ? el.value : ''; };
+    const unitEl = tr.querySelector('.qitem-unit');
+    const misc = _readFeeCell(tr, 'misc');
+    const frt  = _readFeeCell(tr, 'freight');
+    lines.push(_normQuoteLine({
+      product_name:    txt('.qitem-name'),
+      spec:            txt('.qitem-spec'),
+      quantity:        num('.qitem-qty'),
+      unit:            unitEl ? unitEl.value : 'MT',
+      factory_price:   num('.qitem-factory'),
+      markup_rate:     num('.qitem-markup'),
+      commission_rate: num('.qitem-comm'),
+      misc_mode:       misc.mode,
+      misc_total:      misc.total,
+      misc_unit:       misc.unit,
+      freight_mode:    frt.mode,
+      freight_total:   frt.total,
+      freight_unit:    frt.unit
+    }));
+  });
+  return lines;
+}
+
+/* 绘制一个价格单元格：主数字（每单位价）+ 灰色小字（每公斤/每吨折算） */
+function _paintPriceCell(cell, price, sym, unit, visible) {
+  if (!cell) return;
+  if (!visible || !price) { cell.innerHTML = '<span style="color:#d1d5db;">—</span>'; return; }
+  const u = String(unit || 'MT').toUpperCase();
+  let sub = '';
+  if (price.perKg !== null && price.perKg !== undefined) {
+    sub = (u === 'KG')
+      ? '≈ ' + sym + _fmtNum(price.perT, 2) + ' /T'
+      : '≈ ' + sym + _fmtNum(price.perKg, 2) + ' /kg';
+  }
+  cell.innerHTML =
+    '<div style="font-weight:700;color:#1a56db;white-space:nowrap;">' + sym + _fmtNum(price.perUnit, 2) +
+      '<span style="font-size:10px;font-weight:400;color:#9ca3af;">/' + u + '</span></div>' +
+    (sub ? '<div style="font-size:10px;color:#9ca3af;white-space:nowrap;">' + sub + '</div>' : '');
+}
+
+/* 绘制汇总区 */
+function _paintQuoteSummary(sum, meta) {
+  const sym = _curSym(meta.currency);
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  /* 汇率保留至少 2 位小数（6.6 → 6.60），最多 4 位 */
+  const fmtRate = v => {
+    const n = _qnum(v);
+    const dec = (String(n).split('.')[1] || '').length;
+    return n.toFixed(Math.min(4, Math.max(2, dec)));
+  };
+
+  set('quote-sum-factory',      '¥' + _fmtNum(sum.factoryTotal, 2));
+  set('quote-sum-markup',       '¥' + _fmtNum(sum.markupAmt, 2));
+  set('quote-sum-markup-rate',  '(' + sum.avgMarkup.toFixed(2) + '%)');
+  set('quote-sum-comm',         '¥' + _fmtNum(sum.commAmt, 2));
+  set('quote-sum-comm-rate',    '(' + sum.avgComm.toFixed(2) + '%)');
+  set('quote-sum-misc',         '¥' + _fmtNum(sum.miscCny, 2));
+  set('quote-sum-freight',      '¥' + _fmtNum(sum.freightCny, 2));
+  set('quote-sum-total',        sym + _fmtNum(sum.quoted, 2));
+  set('quote-sum-total-label',  '(' + sum.incoterms + ')');
+  set('quote-sum-share',        sum.shareOfPrice.toFixed(2) + '%');
+  set('quote-sum-cost',         _fmtNum(sum.factoryTotal + sum.miscCny + sum.freightCny, 2));
+
+  /* 汇率提示：报价汇率 vs 实际汇率的安全垫 */
+  const noteEl = document.getElementById('quote-sum-rate-note');
+  if (noteEl) {
+    const cur = String(meta.currency || 'USD').toUpperCase();
+    if (cur === 'CNY') {
+      noteEl.innerHTML = '<span style="color:#9ca3af;">人民币报价，无需汇率换算</span>';
+    } else if (!meta.exchange_rate) {
+      noteEl.innerHTML = '<span style="color:#dc2626;">⚠️ 未填报价汇率，价格未折算</span>';
+    } else {
+      let html = '报价汇率 <strong style="color:#111827;">' + fmtRate(meta.exchange_rate) + '</strong>';
+      if (meta.actual_rate > 0) {
+        const cushion = (meta.actual_rate / meta.exchange_rate - 1) * 100;
+        const color = cushion >= 0 ? '#059669' : '#dc2626';
+        html += ' · 实际 <strong style="color:#111827;">' + fmtRate(meta.actual_rate) + '</strong>'
+             + '<br><span style="color:' + color + ';">安全垫 ' + (cushion >= 0 ? '+' : '') + cushion.toFixed(2) + '%</span>';
+      } else {
+        html += '<br><span style="color:#9ca3af;">未填实际汇率</span>';
+      }
+      noteEl.innerHTML = html;
+    }
+  }
+}
+
+/* 币种切换：人民币时汇率固定 1 并禁用；其他币种恢复可编辑 */
+function onQuoteCurrencyChange() {
+  const cur = String((document.getElementById('quote-currency') || {}).value || 'USD').toUpperCase();
+  const rateEl = document.getElementById('quote-exchange-rate');
+  const actEl  = document.getElementById('quote-actual-rate');
+  if (cur === 'CNY') {
+    if (rateEl) { rateEl.value = 1; rateEl.disabled = true; rateEl.style.background = '#f9fafb'; }
+    if (actEl)  { actEl.value = 1;  actEl.disabled = true;  actEl.style.background = '#f9fafb'; }
+  } else {
+    if (rateEl) { rateEl.disabled = false; rateEl.style.background = ''; if (rateEl.value === '1') rateEl.value = ''; }
+    if (actEl)  { actEl.disabled = false;  actEl.style.background = '';  if (actEl.value === '1') actEl.value = ''; }
+  }
+  calcQuoteTotal();
+}
+
+/* 实时计算：逐行价格 + 汇总 */
+function calcQuoteTotal() {
+  const meta  = _readQuoteMetaFromUI();
+  const lines = _readQuoteLinesFromUI();
+  const sum   = _calcQuoteSummary(lines, meta);
+  const sym   = _curSym(meta.currency);
+
+  document.querySelectorAll('#quote-items-tbody tr').forEach(function (tr, i) {
+    const d = sum.details[i];
+    if (!d) return;
+    _paintPriceCell(tr.querySelector('.qitem-exw'), d.prices.exw, sym, d.unit, d.maxTier >= 1);
+    _paintPriceCell(tr.querySelector('.qitem-fob'), d.prices.fob, sym, d.unit, d.maxTier >= 2);
+    _paintPriceCell(tr.querySelector('.qitem-cif'), d.prices.cif, sym, d.unit, d.maxTier >= 3);
+
+    /* 费用单元格下方的换算提示 */
+    const misc = _readFeeCell(tr, 'misc');
+    const frt  = _readFeeCell(tr, 'freight');
+    const mHint = tr.querySelector('.qitem-misc-hint');
+    const fHint = tr.querySelector('.qitem-freight-hint');
+    if (mHint) mHint.textContent = (misc.mode === 'unit')
+      ? '合 ¥' + _fmtNum(misc.total, 2)
+      : (d.qty > 0 ? '¥' + _fmtNum(misc.unit, 2) + '/单位' : '');
+    if (fHint) fHint.textContent = (frt.mode === 'unit')
+      ? '合 ¥' + _fmtNum(frt.total, 2)
+      : (d.qty > 0 ? '¥' + _fmtNum(frt.unit, 2) + '/单位' : '');
+  });
+
+  _paintQuoteSummary(sum, meta);
+  return sum;
+}
+
+/* ==== QUOTE_UI_V4_END ==== */
 
 async function saveQuote(isDraft) {
   const customer = document.getElementById('quote-customer').value.trim();
   if (!customer) { showToast('请选择或输入客户公司', 'warning'); return; }
-  const items = [];
-  document.querySelectorAll('#quote-items-tbody tr').forEach(tr => {
-    const name = tr.querySelector('.qitem-name').value.trim();
-    if (!name) return;
-    items.push({
-      product_name: name,
-      spec: tr.querySelector('.qitem-spec').value.trim(),
-      quantity: parseFloat(tr.querySelector('.qitem-qty').value) || 0,
-      unit: tr.querySelector('.qitem-unit').value,
-      unit_price: parseFloat(tr.querySelector('.qitem-price').value) || 0,
-      unit_cost: parseFloat(tr.querySelector('.qitem-cost').value) || 0,
+
+  const meta  = _readQuoteMetaFromUI();
+  const lines = _readQuoteLinesFromUI().filter(function (l) {
+    return l.product_name && (l.quantity > 0 || l.factory_price > 0);
+  });
+  if (!lines.length) { showToast('请至少填写一个完整的产品明细行（产品名称 + 数量 + 出厂价）', 'warning'); return; }
+  if (meta.currency !== 'CNY' && !meta.exchange_rate) {
+    showToast('请填写报价汇率（人民币兑' + meta.currency + '）', 'warning'); return;
+  }
+
+  const sum = _calcQuoteSummary(lines, meta);
+
+  /* 保险费单独落库：从杂费明细里汇总（第 5 步的加总器会写入 misc_items） */
+  let insuranceCny = 0;
+  lines.forEach(function (l) {
+    (l.misc_items || []).forEach(function (it) {
+      if (String(it && it.name || '').indexOf('保险') >= 0) insuranceCny += _qnum(it.amount);
     });
   });
-  if (!items.length) { showToast('请至少添加一个产品明细行', 'warning'); return; }
-  let subtotal = 0, totalCost = 0;
-  items.forEach(it => { subtotal += it.quantity * it.unit_price; totalCost += it.quantity * it.unit_cost; });
-  const freight = parseFloat(document.getElementById('quote-freight').value) || 0;
-  const insurance = parseFloat(document.getElementById('quote-insurance').value) || 0;
-  const otherCost = parseFloat(document.getElementById('quote-other-cost').value) || 0;
-  const commissionRate = parseFloat(document.getElementById('quote-commission').value) || 0;
-  const commission = subtotal * commissionRate / 100;
-  const totalAmount = subtotal + freight + insurance + otherCost + commission;
-  const id = document.getElementById('quote-id').value;
+
+  const id  = document.getElementById('quote-id').value;
+  const ver = parseInt(document.getElementById('quote-version').value) || 1;
+
   const payload = {
-    quote_number: document.getElementById('quote-number').value,
+    quote_number:  document.getElementById('quote-number').value,
     customer_name: customer,
-    quote_date: document.getElementById('quote-date').value ? new Date(document.getElementById('quote-date').value).getTime() : Date.now(),
-    valid_until: document.getElementById('quote-valid-until').value ? new Date(document.getElementById('quote-valid-until').value).getTime() : null,
-    currency: document.getElementById('quote-currency').value,
-    status: isDraft ? '草稿' : document.getElementById('quote-status').value,
+    quote_date:    document.getElementById('quote-date').value ? new Date(document.getElementById('quote-date').value).getTime() : Date.now(),
+    valid_until:   document.getElementById('quote-valid-until').value ? new Date(document.getElementById('quote-valid-until').value).getTime() : null,
+    currency:      meta.currency,
+    status:        isDraft ? '草稿' : document.getElementById('quote-status').value,
     payment_terms: document.getElementById('quote-payment-terms').value,
-    incoterms: document.getElementById('quote-incoterms').value,
+    incoterms:     meta.incoterms,
     delivery_time: document.getElementById('quote-delivery').value.trim(),
-    origin_port: document.getElementById('quote-origin').value.trim(),
-    freight, insurance, other_cost: otherCost, commission_rate: commissionRate,
-    subtotal, total_cost: totalCost, total_amount: totalAmount,
-    items: JSON.stringify(items),
-    notes: document.getElementById('quote-notes').value.trim(),
-    version: parseInt(document.getElementById('quote-version').value) || 1,
+    origin_port:   document.getElementById('quote-origin').value.trim(),
+
+    /* 金额列（数据库实际存在的列名） */
+    freight:    sum.freightCny,                                  // 运费合计（¥）
+    insurance:  insuranceCny,                                    // 保险费合计（¥，CIF 时来自杂费明细）
+    other_cost: sum.miscCny,                                     // 杂费合计（¥）
+    commission: sum.commAmt,                                     // 暗佣合计（¥）
+    margin_rate: sum.avgMarkup,                                  // 加权平均溢价率（%），与用户输入口径一致
+    total_cost: sum.factoryTotal + sum.miscCny + sum.freightCny, // 真实成本（¥）
+    total_amount: sum.quoted,                                    // 报价总额（报价币种，对外）
+
+    /* 明细与元信息 */
+    items: JSON.stringify({
+      schema: 2,
+      meta: { exchange_rate: meta.exchange_rate, actual_rate: meta.actual_rate, version: ver },
+      lines: lines
+    }),
+    notes: document.getElementById('quote-notes').value.trim()
   };
+
   try {
     if (id) { await apiPut('quotes', id, payload); showToast('报价单已更新', 'success'); }
     else { await apiPost('quotes', payload); showToast(isDraft ? '草稿已保存' : '报价单已创建', 'success'); }
@@ -6981,22 +7186,27 @@ async function saveQuote(isDraft) {
 }
 
 function editQuote(id) {
-  const q = allQuotes.find(q => q.id === id);
-  if (q) {
-    let items = [];
-    try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
-    openQuoteModal({...q, items});
-  }
+  const q = allQuotes.find(x => x.id === id);
+  if (q) openQuoteModal(q);   /* _quoteLines 内部解析 items，无需手工 JSON.parse */
 }
 
 async function duplicateQuote(id) {
-  const q = allQuotes.find(q => q.id === id);
+  const q = allQuotes.find(x => x.id === id);
   if (!q) return;
-  let items = [];
-  try { items = typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); } catch(e) {}
-  const newQuote = {...q, id: null, quote_number: generateQuoteNumber(), version: (q.version||1)+1, status: '草稿', items};
+  const meta = _quoteMeta(q);
+  const newVer = (meta.version || 1) + 1;
+  const newQuote = Object.assign({}, q, {
+    id: null,
+    quote_number: generateQuoteNumber(),
+    status: '草稿',
+    items: JSON.stringify({
+      schema: 2,
+      meta: { exchange_rate: meta.exchange_rate, actual_rate: meta.actual_rate, version: newVer },
+      lines: _quoteLines(q)
+    })
+  });
   openQuoteModal(newQuote);
-  showToast('已复制为新版本 v' + newQuote.version + '，请修改后保存', 'info', 4000);
+  showToast('已复制为新版本 v' + newVer + '，请修改后保存', 'info', 4000);
 }
 
 function deleteQuote(id) {
