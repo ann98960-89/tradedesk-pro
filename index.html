@@ -2793,6 +2793,7 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
     <div class="modal-header">
       <div class="modal-title">报价单预览</div>
       <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-outline" onclick="openLetterheadModal()" title="设置打印用的公司抬头"><i class="fas fa-building"></i> 公司抬头</button>
         <button class="btn btn-sm btn-primary" onclick="printQuote()"><i class="fas fa-print"></i> 打印 / PDF</button>
         <button class="btn-close" onclick="closeQuotePreview()">x</button>
       </div>
@@ -2802,6 +2803,59 @@ function guardPage(){if(!isPasswordSetup()){showLoginOverlay('setup');return fal
 </div>
 
 <datalist id="quote-datalist"></datalist>
+
+<!-- ===== 公司抬头（打印用） ===== -->
+<div class="modal-overlay" id="letterhead-modal" style="z-index:430;">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header">
+      <div class="modal-title">公司抬头（打印用）</div>
+      <button class="btn-close" onclick="closeLetterheadModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:#6b7280;line-height:1.6;margin-bottom:14px;padding:10px 12px;background:#f0f9ff;border-radius:8px;">
+        这些信息会印在报价单页眉与页脚，只保存在本机浏览器（换设备需重新填写）。留空的项不会显示。
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">公司名称（中文）</label>
+          <input type="text" class="form-control" id="lh-name" placeholder="例如：江苏某某化工有限公司">
+        </div>
+        <div class="form-group">
+          <label class="form-label">公司名称（英文）</label>
+          <input type="text" class="form-control" id="lh-name-en" placeholder="e.g. Jiangsu XXX Chemical Co., Ltd.">
+        </div>
+        <div class="form-group">
+          <label class="form-label">电话</label>
+          <input type="text" class="form-control" id="lh-tel" placeholder="+86-xxx">
+        </div>
+        <div class="form-group">
+          <label class="form-label">邮箱</label>
+          <input type="text" class="form-control" id="lh-email" placeholder="sales@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">网站</label>
+          <input type="text" class="form-control" id="lh-website" placeholder="www.example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">地址</label>
+          <input type="text" class="form-control" id="lh-address" placeholder="省份 城市 区 街道">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">银行信息（选填）</label>
+        <textarea class="form-control" id="lh-bank" rows="2" placeholder="开户行 / 账号 / SWIFT"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">页脚声明（选填）</label>
+        <input type="text" class="form-control" id="lh-footer" placeholder="例如：本报价单有效期以单内注明为准，逾期需重新确认。">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeLetterheadModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveLetterheadFromForm()">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 
@@ -6716,6 +6770,15 @@ function _freightTotal(line) {
   return _qnum(line.freight_total);
 }
 
+/* 金额舍入到分。用字符串移位而非 n*100，避开 196255.125*100=19625512.4999… 这类浮点坑 */
+function _round2(v) {
+  const n = _qnum(v);
+  if (!isFinite(n)) return 0;
+  const s = String(n);
+  if (s.indexOf('e') >= 0 || s.indexOf('E') >= 0) return Math.round(n * 100) / 100;
+  return Number(Math.round(Number(s + 'e2')) + 'e-2');
+}
+
 /* 把「人民币总额」换算成三种单价（报价币种）
    → { total, perUnit, perT, perKg }
    非重量单位（PC/SET/ROL/COIL/DRUM）的 perT / perKg 返回 null，由界面隐藏 */
@@ -6729,6 +6792,14 @@ function _unitPrices(totalCny, qty, unit, rate) {
   if (u === 'MT' || u === 'T' || u === 'TON') { perT = perUnit; perKg = perUnit / 1000; }
   else if (u === 'KG') { perKg = perUnit; perT = perUnit * 1000; }
   return { total, perUnit, perT, perKg };
+}
+
+/* 对外报价的「落单价」：单价定死 2 位小数，金额 = 单价 × 数量。
+   这样客户拿计算器按「单价 × 数量」必然等于单上金额（差 1 分就会被质疑） */
+function _settlePrices(p, qty) {
+  if (!p) return p;
+  const up = _round2(p.perUnit);
+  return { total: _round2(up * _qnum(qty)), perUnit: up, perT: p.perT, perKg: p.perKg };
 }
 
 /* 单行计算 → 完整价格阶梯（人民币金额 + 报价币种单价） */
@@ -6779,7 +6850,7 @@ function _calcQuoteLine(line, meta) {
       fob: _unitPrices(fobTotal, qty, line.unit, rate),
       cif: _unitPrices(cifTotal, qty, line.unit, rate)
     },
-    quoted: _unitPrices(quotedCny, qty, line.unit, rate),
+    quoted: _settlePrices(_unitPrices(quotedCny, qty, line.unit, rate), qty),
 
     /* 溢价额占最终报价的比例（灰色小字只读参考值，不参与任何计算） */
     shareOfPrice: quotedCny > 0 ? markupAmt / quotedCny * 100 : 0,
@@ -6809,6 +6880,13 @@ function _calcQuoteSummary(lines, meta) {
   const avgMarkup = acc.factoryTotal > 0 ? acc.markupAmt / acc.factoryTotal * 100 : 0;
   const avgComm   = acc.factoryTotal > 0 ? acc.commAmt   / acc.factoryTotal * 100 : 0;
 
+  /* 报价合计 = 各行「单价 × 数量」之和（单价已按 2 位小数定死）。
+     与 acc.quotedCny（未舍入的理论值）可能差几分，属正常分币差；
+     界面汇总 / 打印件 / Excel 导出统一用 quoted，三处才能对得上。 */
+  const quotedSum = _round2(details.reduce(function (s, d) {
+    return s + _qnum(d.quoted && d.quoted.total);
+  }, 0));
+
   return {
     factoryTotal: acc.factoryTotal,
     markupAmt:    acc.markupAmt,
@@ -6819,7 +6897,7 @@ function _calcQuoteSummary(lines, meta) {
     fobTotal:     acc.fobTotal,
     cifTotal:     acc.cifTotal,
     quotedCny:    acc.quotedCny,
-    quoted:       acc.quotedCny / rate,
+    quoted:       quotedSum,
     avgMarkup:    avgMarkup,
     avgComm:      avgComm,
     shareOfPrice: acc.quotedCny > 0 ? acc.markupAmt / acc.quotedCny * 100 : 0,
@@ -7439,6 +7517,7 @@ function previewQuote(id) {
   };
 
   const body = document.getElementById('quote-preview-body');
+  if (body) body.setAttribute('data-quote-id', q.id);
   body.innerHTML = `
     <div style="padding:20px;font-family:'Inter','PingFang SC',sans-serif;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;border-bottom:2px solid #1a56db;padding-bottom:16px;">
@@ -7516,13 +7595,295 @@ function closeQuotePreview() {
   document.getElementById('quote-preview-modal').classList.remove('active');
 }
 
-function printQuote() {
-  const body = document.getElementById('quote-preview-body').innerHTML;
-  const w = window.open('', '_blank');
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>报价单</title><style>body{font-family:'Inter','PingFang SC',sans-serif;padding:30px;}table{width:100%;border-collapse:collapse;font-size:13px;}th,td{border:1px solid #e5e7eb;padding:9px 12px;}th{background:#f3f4f6;}@media print{body{padding:15px;}}</style></head><body>${body}</body></html>`);
-  w.document.close();
-  setTimeout(() => { w.print(); }, 300);
+/* ==== QUOTE_PRINT_V1_START ====
+   打印模块：A4 版式 + 公司抬头 + 金额大写 + 条款说明 + 签字栏
+   与预览弹窗解耦——直接由 _quoteMeta / _calcQuoteSummary 现算，不读 DOM。 */
+
+const _LETTERHEAD_KEY = 'tdp_letterhead';
+
+function getLetterhead() {
+  try {
+    const o = JSON.parse(localStorage.getItem(_LETTERHEAD_KEY) || '{}');
+    return (o && typeof o === 'object') ? o : {};
+  } catch (e) { return {}; }
 }
+
+function saveLetterhead(obj) {
+  try { localStorage.setItem(_LETTERHEAD_KEY, JSON.stringify(obj || {})); }
+  catch (e) { console.warn('[TDP] 抬头保存失败', e.message); }
+}
+
+function openLetterheadModal() {
+  const lh = getLetterhead();
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  set('lh-name', lh.name);
+  set('lh-name-en', lh.nameEn);
+  set('lh-tel', lh.tel);
+  set('lh-email', lh.email);
+  set('lh-website', lh.website);
+  set('lh-address', lh.address);
+  set('lh-bank', lh.bank);
+  set('lh-footer', lh.footer);
+  const m = document.getElementById('letterhead-modal');
+  if (m) m.classList.add('active');
+}
+
+function closeLetterheadModal() {
+  const m = document.getElementById('letterhead-modal');
+  if (m) m.classList.remove('active');
+}
+
+function saveLetterheadFromForm() {
+  const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  saveLetterhead({
+    name: get('lh-name'),
+    nameEn: get('lh-name-en'),
+    tel: get('lh-tel'),
+    email: get('lh-email'),
+    website: get('lh-website'),
+    address: get('lh-address'),
+    bank: get('lh-bank'),
+    footer: get('lh-footer')
+  });
+  closeLetterheadModal();
+  showToast('公司抬头已保存，下次打印自动带上', 'success');
+}
+
+/* 金额转人民币大写（支持到万亿，负数加「负」） */
+function _amountToChinese(num) {
+  const n = Math.round(_qnum(num) * 100) / 100;
+  if (!isFinite(n)) return '';
+  if (n === 0) return '零元整';
+
+  const D = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖'];
+  const U = ['', '拾', '佰', '仟'];
+  const B = ['', '万', '亿', '万亿'];
+
+  const neg = n < 0;
+  const abs = Math.abs(n);
+  if (abs >= 1e16) return '';
+
+  const intPart = Math.floor(abs);
+  const cents   = Math.round((abs - intPart) * 100);
+  const jiao    = Math.floor(cents / 10);
+  const fen     = cents % 10;
+
+  let out = '';
+  if (intPart > 0) {
+    const s = String(intPart);
+    const len = s.length;
+    let zero = false;      // 累积了待输出的「零」
+    let started = false;   // 是否已输出过非零数字
+
+    for (let i = 0; i < len; i++) {
+      const d   = +s[i];
+      const pos = len - 1 - i;      // 从右数第几位（0 起）
+      const posInGroup = pos % 4;   // 组内位置
+      const groupIdx   = Math.floor(pos / 4);
+
+      if (d === 0) {
+        zero = true;
+      } else {
+        if (zero && started) out += '零';
+        zero = false;
+        out += D[d] + U[posInGroup];
+        started = true;
+      }
+
+      /* 走到某一组的末位时，若该组存在非零数字，补上「万/亿」 */
+      if (posInGroup === 0 && groupIdx > 0) {
+        const groupStr = s.slice(Math.max(0, i - 3), i + 1);
+        if (/[1-9]/.test(groupStr)) {
+          out += B[groupIdx] || '';
+          zero = false;   // 组单位已闭合，组内尾零不再补零
+        }
+      }
+    }
+    out += '元';
+  } else {
+    out = '零元';
+  }
+
+  if (jiao === 0 && fen === 0) {
+    out += '整';
+  } else {
+    if (jiao > 0) out += D[jiao] + '角';
+    else if (fen > 0) out += '零';
+    if (fen > 0) out += D[fen] + '分';
+    else out += '整';
+  }
+
+  return (neg ? '负' : '') + out;
+}
+
+/* 条款包含范围（对外说明用） */
+const _TERM_INCLUDES = {
+  EXW: '工厂交货价，不含内陆运输、报关、码头及海运费用。',
+  FCA: '含内陆运输、进仓及报关费用，不含海运及保险。',
+  FOB: '含内陆运输、进仓、报关、码头及货代费用，不含海运费及保险。',
+  CFR: '含内陆运输、报关、码头、货代及海运费，不含保险。',
+  CIF: '含内陆运输、报关、码头、货代、海运费及保险费。'
+};
+
+/* 数量显示：最多 2 位小数并去掉无意义的尾零（1.5 / 11.25 / 3），保留千分位 */
+function _fmtQty(n) {
+  const s = _fmtNum(n, 2);
+  return s.indexOf('.') >= 0 ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+}
+
+/* 生成可打印的完整 HTML 文档（纯字符串，便于测试） */
+function buildQuotePrintHtml(q) {
+  const meta  = _quoteMeta(q || {});
+  const lines = _quoteLines(q || {});
+  const sum   = _calcQuoteSummary(lines, meta);
+  const sym   = _curSym(meta.currency);
+  const term  = meta.incoterms;
+  const lh    = getLetterhead();
+  const e     = escHtml;
+
+  const companyBlock = (lh.name || lh.nameEn)
+    ? '<div class="lh-name">' + e(lh.name || lh.nameEn) + '</div>'
+      + (lh.name && lh.nameEn ? '<div class="lh-en">' + e(lh.nameEn) + '</div>' : '')
+    : '<div class="lh-name" style="color:#9ca3af;">（请在「公司抬头」中填写公司名称）</div>';
+
+  const contactLines = [
+    lh.address ? e(lh.address) : '',
+    [lh.tel ? 'TEL ' + e(lh.tel) : '', lh.email ? 'EMAIL ' + e(lh.email) : ''].filter(Boolean).join('　'),
+    lh.website ? e(lh.website) : ''
+  ].filter(Boolean).join('<br>');
+
+  /* 打印件上的算术必须自洽：单价按 2 位小数定死，金额 = 单价 × 数量，合计 = 各行金额之和。
+     否则客户拿计算器按 11,048.17 × 1.5 会得到 16,572.26，与单上 16,572.25 差 1 分。 */
+  let printTotal = 0;
+  const rows = sum.details.map(function (d, i) {
+    const ln = lines[i] || {};
+    const u  = String(d.unit || 'MT').toUpperCase();
+    const up  = Math.round(_qnum(d.quoted.perUnit) * 100) / 100;
+    const amt = Math.round(up * _qnum(d.qty) * 100) / 100;
+    printTotal += amt;
+    const sub = (d.quoted.perKg !== null && d.quoted.perKg !== undefined)
+      ? '<div class="unit-sub">≈ ' + sym + _fmtNum(u === 'KG' ? d.quoted.perT : d.quoted.perKg, 2) + ' /' + (u === 'KG' ? 'T' : 'kg') + '</div>'
+      : '';
+    return '<tr>'
+      + '<td class="ctr">' + (i + 1) + '</td>'
+      + '<td><b>' + e(ln.product_name || '') + '</b></td>'
+      + '<td>' + e(ln.spec || '-') + '</td>'
+      + '<td class="num">' + _fmtQty(d.qty) + '</td>'
+      + '<td class="ctr">' + e(u) + '</td>'
+      + '<td class="num">' + _fmtNum(up, 2) + sub + '</td>'
+      + '<td class="num"><b>' + _fmtNum(amt, 2) + '</b></td>'
+      + '</tr>';
+  }).join('');
+  printTotal = Math.round(printTotal * 100) / 100;
+
+  const words = _amountToChinese(printTotal);
+  const wordsLine = (meta.currency === 'CNY' || meta.currency === 'RMB')
+    ? '<div class="words"><b>金额大写：</b>' + e(words) + '</div>'
+    : '';
+
+  const now = new Date();
+  const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
+    + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+  return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+    + '<title>报价单 ' + e(q.quote_number || '') + '</title>'
+    + '<style>'
+    + '@page{size:A4;margin:13mm 12mm;}'
+    + '*{box-sizing:border-box;}'
+    + 'body{font-family:"PingFang SC","Microsoft YaHei","Inter",sans-serif;color:#111827;font-size:10pt;margin:0;'
+    +   '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    + '.lh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #1a56db;padding-bottom:9px;}'
+    + '.lh-name{font-size:15pt;font-weight:800;letter-spacing:0.5px;line-height:1.25;}'
+    + '.lh-en{font-size:8.5pt;color:#6b7280;margin-top:3px;}'
+    + '.lh-meta{font-size:8pt;color:#4b5563;text-align:right;line-height:1.7;max-width:46%;}'
+    + '.doc-title{font-size:14pt;font-weight:800;text-align:center;margin:13px 0 3px;letter-spacing:7px;}'
+    + '.doc-sub{text-align:center;font-size:8pt;color:#9ca3af;margin-bottom:12px;letter-spacing:1px;}'
+    + '.info{display:flex;flex-wrap:wrap;font-size:9pt;margin-bottom:11px;}'
+    + '.info>div{width:50%;padding:2.5px 0;}'
+    + '.info b{color:#6b7280;font-weight:600;display:inline-block;min-width:60px;}'
+    + 'table.items{width:100%;border-collapse:collapse;font-size:9pt;}'
+    + 'table.items th{background:#eef2ff;border:1px solid #cbd5e1;padding:6px 7px;font-weight:700;}'
+    + 'table.items td{border:1px solid #cbd5e1;padding:6px 7px;vertical-align:top;}'
+    + 'table.items thead{display:table-header-group;}'
+    + 'table.items tr{page-break-inside:avoid;}'
+    + '.num{text-align:right;font-variant-numeric:tabular-nums;}'
+    + '.ctr{text-align:center;}'
+    + '.unit-sub{font-size:7.5pt;color:#9ca3af;margin-top:1px;}'
+    + 'tfoot td{background:#f8fafc;font-weight:700;}'
+    + '.total-line{font-size:11pt;color:#1a56db;}'
+    + '.words{margin-top:7px;font-size:9pt;}'
+    + '.words b{color:#6b7280;font-weight:600;}'
+    + '.term-note{margin-top:6px;font-size:8pt;color:#6b7280;line-height:1.6;}'
+    + '.blocks{margin-top:13px;font-size:8.5pt;line-height:1.7;}'
+    + '.block{border:1px solid #e5e7eb;border-radius:4px;padding:7px 10px;margin-bottom:7px;}'
+    + '.block b{color:#374151;}'
+    + '.sign{display:flex;gap:44px;margin-top:26px;font-size:8.5pt;}'
+    + '.sign>div{flex:1;border-top:1px solid #9ca3af;padding-top:6px;color:#6b7280;}'
+    + '.footer{margin-top:16px;padding-top:7px;border-top:1px dashed #d1d5db;font-size:7.5pt;color:#9ca3af;text-align:center;line-height:1.6;}'
+    + '</style></head><body>'
+
+    + '<div class="lh"><div>' + companyBlock + '</div>'
+    +   '<div class="lh-meta">' + (contactLines || '') + '</div></div>'
+
+    + '<div class="doc-title">报 价 单</div>'
+    + '<div class="doc-sub">QUOTATION</div>'
+
+    + '<div class="info">'
+    +   '<div><b>客户</b>' + e(q.customer_name || '') + '</div>'
+    +   '<div><b>报价单号</b>' + e(q.quote_number || '') + (meta.version > 1 ? '（v' + meta.version + '）' : '') + '</div>'
+    +   '<div><b>报价日期</b>' + formatDate(q.quote_date) + '</div>'
+    +   '<div><b>有效期至</b>' + formatDate(q.valid_until) + '</div>'
+    +   '<div><b>贸易条款</b>' + e(term) + (q.origin_port ? ' ' + e(q.origin_port) : '') + '</div>'
+    +   '<div><b>报价币种</b>' + e(meta.currency) + '</div>'
+    +   '<div><b>付款方式</b>' + e(q.payment_terms || '-') + '</div>'
+    +   '<div><b>交货周期</b>' + e(q.delivery_time || '-') + '</div>'
+    + '</div>'
+
+    + '<table class="items"><thead><tr>'
+    +   '<th class="ctr" style="width:26px;">#</th>'
+    +   '<th style="width:24%;">产品名称</th>'
+    +   '<th style="width:15%;">规格</th>'
+    +   '<th class="num" style="width:11%;">数量</th>'
+    +   '<th class="ctr" style="width:8%;">单位</th>'
+    +   '<th class="num" style="width:21%;">单价（' + sym + '）</th>'
+    +   '<th class="num" style="width:21%;">金额（' + sym + '）</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody>'
+    + '<tfoot><tr><td colspan="6" class="num total-line">合计 Total（' + e(term) + '）</td>'
+    +   '<td class="num total-line">' + sym + _fmtNum(printTotal, 2) + '</td></tr></tfoot></table>'
+
+    + wordsLine
+    + '<div class="term-note">价格说明：' + e(_TERM_INCLUDES[term] || '') + '</div>'
+
+    + (q.notes ? '<div class="blocks"><div class="block"><b>备注：</b>' + e(q.notes).replace(/\n/g, '<br>') + '</div></div>' : '')
+
+    + (lh.bank ? '<div class="blocks"><div class="block"><b>银行信息：</b>' + e(lh.bank).replace(/\n/g, '<br>') + '</div></div>' : '')
+
+    + '<div class="sign"><div>供方（盖章 / 签字）</div><div>需方（盖章 / 签字）</div></div>'
+
+    + '<div class="footer">'
+    +   (lh.footer ? e(lh.footer) + '<br>' : '')
+    +   (lh.name ? e(lh.name) + '　' : '') + '打印时间 ' + stamp
+    + '</div>'
+
+    + '</body></html>';
+}
+
+function printQuote() {
+  const bodyEl = document.getElementById('quote-preview-body');
+  const id = bodyEl ? bodyEl.getAttribute('data-quote-id') : null;
+  const q = id ? allQuotes.find(function (x) { return x.id === id; }) : null;
+  if (!q) { showToast('请先打开一份报价单预览', 'warning'); return; }
+
+  const html = buildQuotePrintHtml(q);
+  const w = window.open('', '_blank');
+  if (!w) { showToast('浏览器拦截了弹窗，请允许本站弹出窗口后重试', 'error', 5000); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 350);
+}
+
+/* ==== QUOTE_PRINT_V1_END ==== */
 
 function refreshQuoteDatalist() {
   const dl = document.getElementById('quote-datalist');
