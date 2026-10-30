@@ -3104,10 +3104,16 @@ async function _pullFromCloud() {
          2. 云端记录若存在解密失败的字段，说明它是用另一把密钥或损坏数据写入的，
             绝不能覆盖本地 —— 直接跳过，否则会造成不可逆的数据丢失。 */
       let skippedCorrupt = 0;
+      let skippedGhost = 0;
       remote.forEach(r => {
         if (_hasDecryptFail(r)) { skippedCorrupt++; return; }
         const localRow = map[r.id];
-        if (!localRow) { map[r.id] = r; return; }
+        if (!localRow) {
+          // 云端有此记录但本地没有：如果是 _deleted=true 的幽灵记录（之前已永久删除），
+          // 不拉回来，防止已删数据「复活」
+          if (r._deleted === true) { skippedGhost++; return; }
+          map[r.id] = r; return;
+        }
         // 云端有显式版本号时按版本号比较；否则只有当本地记录缺失关键字段时才用云端补全
         const remoteVer = r._rev || r.version || 0;
         const localVer  = localRow._rev || localRow.version || 0;
@@ -3120,6 +3126,9 @@ async function _pullFromCloud() {
       });
       if (skippedCorrupt) {
         console.warn(`[TDP] ⚠️ 表 ${tbl} 有 ${skippedCorrupt} 条云端记录解密失败，已跳过（未覆盖本地）`);
+      }
+      if (skippedGhost) {
+        console.log(`[TDP] 🗑️ 表 ${tbl} 有 ${skippedGhost} 条云端幽灵记录（已永久删除）已跳过`);
       }
       const merged = Object.values(map);
       /* 数据清洗：云端历史数据可能存了英文枚举（high/medium/low、pending/completed），
@@ -3151,7 +3160,11 @@ async function _pushToCloud(action, table, id, data) {
   if (!_cryptoKey) { console.warn('[TDP] 未登录，跳过云端推送'); return; }
   try {
     if (action === 'delete') {
-      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, updated_at:Date.now()}), _prefer:'return=minimal' });
+      // 永久删除：云端也真正 DELETE，不留幽灵记录
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'DELETE', _prefer:'return=minimal' });
+    } else if (action === 'softdelete') {
+      // 软删除（平台删除 → 回收站）：仅打标记，可恢复
+      await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:true, _deleted_at:data._deleted_at, updated_at:Date.now()}), _prefer:'return=minimal' });
     } else {
       // 过滤掉本地专用字段，然后加密敏感字段
       const clean = Object.fromEntries(
@@ -3350,7 +3363,7 @@ async function apiDelete(table, id, label) {
     rows[idx]._deleted_label = label || id;
     rows[idx].updated_at     = Date.now();
     await _saveTableEncrypted(table, rows);
-    _pushToCloud('patch', table, id, { _deleted:true, _deleted_at:rows[idx]._deleted_at, _deleted_label:rows[idx]._deleted_label }).catch(()=>{});
+    _pushToCloud('softdelete', table, id, { _deleted:true, _deleted_at:rows[idx]._deleted_at, _deleted_label:rows[idx]._deleted_label }).catch(()=>{});
   }
 }
 
