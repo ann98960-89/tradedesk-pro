@@ -383,6 +383,91 @@ function _sanitizeForPush(obj){
   return out;
 }
 
+/* ===== 数据库列白名单 + 字段映射 =====
+   背景（2026-10-30 逐列探测生产库发现）：
+   代码里用的字段名有一部分在数据库里根本不存在 ——
+     quotes: subtotal / version / commission_rate（实际列名是 commission）
+     orders: order_amount（实际 amount）/ tracking_no（实际 tracking_number）/ logistics
+   PostgREST 遇到不存在的列会整条拒绝（42703），导致报价单和订单从未成功同步到云端。
+   解决：推送前先做字段改名映射，再按白名单剔除数据库不存在的列。
+   注意：必须在校验白名单之后再加密，否则数值列会被当字符串加密，写进 bigint 报 22P02。 */
+const _TABLE_COLS = {
+  quotes: new Set([
+    'id','gs_project_id','gs_table_name','created_at','updated_at',
+    '_deleted','_deleted_at','_deleted_label',
+    'quote_number','customer_name','customer_id','quote_date','valid_until','currency','status',
+    'payment_terms','incoterms','delivery_time','origin_port',
+    'freight','insurance','other_cost','commission','margin_rate',
+    'total_cost','total_amount','items','notes'
+  ]),
+  orders: new Set([
+    'id','gs_project_id','gs_table_name','created_at','updated_at',
+    '_deleted','_deleted_at','_deleted_label',
+    'order_number','customer_name','customer_id','quote_ref','order_date','status','priority',
+    'currency','eta','ship_date','payment_terms','incoterms',
+    'paid_amount','amount','balance','tracking_number','logistics_method','items','notes'
+  ])
+};
+/* 本地字段名 → 数据库列名。值为 null 表示数据库无此列，直接丢弃。 */
+const _PUSH_COL_MAP = {
+  orders: {
+    order_amount: 'amount',
+    tracking_no:  'tracking_number',
+    logistics:    'logistics_method'
+  }
+};
+/* 数据库列名 → 本地字段名（拉取时反向还原，保证业务代码读到的字段名不变） */
+const _PULL_COL_MAP = {
+  orders: {
+    amount:            'order_amount',
+    tracking_number:   'tracking_no',
+    logistics_method:  'logistics'
+  }
+};
+
+/* 推送前：改名 + 白名单过滤。未配置的表原样返回，保持原有行为。
+   映射优先：若同时存在 order_amount 和 amount，以 order_amount 为准，
+   避免原列名把映射结果覆盖掉。 */
+function _mapForPush(table, obj){
+  const map  = _PUSH_COL_MAP[table];
+  const cols = _TABLE_COLS[table];
+  if (!map && !cols) return obj;
+  const out = {};
+  const consumed = new Set();
+  // 第一遍：有映射的字段优先写入
+  if (map){
+    for (const [local, target] of Object.entries(map)){
+      if (!Object.prototype.hasOwnProperty.call(obj, local)) continue;
+      consumed.add(local);
+      if (target === null) continue;              // 显式丢弃
+      if (cols && !cols.has(target)) continue;    // 白名单之外
+      out[target] = obj[local];
+    }
+  }
+  // 第二遍：其余字段原样保留，不覆盖第一遍的结果
+  for (const [k, v] of Object.entries(obj)){
+    if (consumed.has(k)) continue;
+    if (cols && !cols.has(k)) continue;
+    if (Object.prototype.hasOwnProperty.call(out, k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/* 拉取后：把数据库列名还原成本地字段名 */
+function _mapFromPull(table, row){
+  const map = _PULL_COL_MAP[table];
+  if (!map || !row || typeof row !== 'object') return row;
+  const out = { ...row };
+  for (const [col, local] of Object.entries(map)){
+    if (Object.prototype.hasOwnProperty.call(out, col)){
+      out[local] = out[col];
+      delete out[col];
+    }
+  }
+  return out;
+}
+
 /* PostgREST 批量 upsert 要求：同一批次内所有对象的字段集合必须完全一致，
    否则报 PGRST-126 "All object keys must match"。
    本地各条记录的字段可能不全（如某些客户没填 next_followup_date），
@@ -3117,8 +3202,9 @@ async function _pullFromCloud() {
       if (!res.ok) return;
       const remote = await res.json();
       if (Array.isArray(remote) && remote.length) {
-        // 解密云端数据（字段级 ENC: 密文 → 明文）
-        remoteMap[tbl] = _cryptoKey ? await decryptArray(remote) : remote;
+        // 解密云端数据（字段级 ENC: 密文 → 明文），并把数据库列名还原成本地字段名
+        const dec = _cryptoKey ? await decryptArray(remote) : remote;
+        remoteMap[tbl] = dec.map(r => _mapFromPull(tbl, r));
       }
     } catch(e) { console.warn('[TDP] 拉取表', tbl, '失败:', e.message); }
   }));
@@ -3214,11 +3300,12 @@ async function _pushToCloud(action, table, id, data) {
       await _sbFetch(`${table}?id=eq.${id}`, { method:'PATCH', body:JSON.stringify({_deleted:false, _deleted_at:null, _deleted_label:null, updated_at:data.updated_at||Date.now()}), _prefer:'return=minimal' });
       pushed = true;
     } else {
-      // 过滤掉本地专用字段，然后加密敏感字段
+      // 过滤掉本地专用字段 → 改名映射 + 列白名单（必须先于加密）→ 加密敏感字段
       const clean = Object.fromEntries(
         Object.entries(data).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
       );
-      let encData = await encryptObject(clean);
+      const mapped = _mapForPush(table, clean);
+      let encData = await encryptObject(mapped);
       // 空字符串 → null（避免 bigint / NOT NULL 列报错）
       encData = _sanitizeForPush(encData);
       // 补齐同步必需的元字段（clean 过滤掉了 gs_*）
@@ -3349,11 +3436,26 @@ function _normStatus(v){
   return _STATUS_ALIAS[s] || _STATUS_ALIAS[s.toLowerCase()] || '待处理';
 }
 
+/* 日期列：数据库里是 text 类型，存的是毫秒时间戳字符串。
+   直接 new Date('1761814800000') 会得到 Invalid Date（日期显示成裸数字）。
+   在数据入口统一转成 number。 */
+const _DATE_COLS = new Set([
+  'quote_date','valid_until','order_date','eta','ship_date',
+  'last_contact_date','next_followup_date','due_date',
+  'followup_date','contact_date','publish_date','expiry_date'
+]);
+
 /* 数据清洗：把云端历史遗留的英文/异常枚举归一化为界面使用的中文标准值。
    在数据入口统一处理，保证筛选、排序、统计、导出各处都拿到一致数据。 */
 function _normalizeRow(table, row){
   if (!row || typeof row !== 'object') return row;
   const r = { ...row };
+  // 日期列：text 存的时间戳字符串 → number
+  for (const k of Object.keys(r)){
+    if (_DATE_COLS.has(k) && typeof r[k] === 'string' && /^\d+$/.test(r[k])){
+      r[k] = Number(r[k]);
+    }
+  }
   if (table === 'todos') {
     if ('priority' in r) r.priority = _normPriority(r.priority);
     if ('status'   in r) r.status   = _normStatus(r.status);
@@ -3531,7 +3633,7 @@ async function _pushAllToCloud() {
         if (res.ok) {
           const remote = await res.json();
           if (Array.isArray(remote) && remote.length) {
-            const dec = _cryptoKey ? await decryptArray(remote) : remote;
+            const dec = (_cryptoKey ? await decryptArray(remote) : remote).map(r => _mapFromPull(tbl, r));
             const extra = dec.filter(r => r && r.id && !localIds.has(r.id) && !_hasDecryptFail(r));
             if (extra.length) {
               console.log(`[TDP] 表 ${tbl}: 从云端补回 ${extra.length} 条本地缺失的记录`);
@@ -3555,7 +3657,8 @@ async function _pushAllToCloud() {
         const clean = Object.fromEntries(
           Object.entries(row).filter(([k]) => !k.startsWith('gs_') && k !== '_prefer')
         );
-        let encData = await encryptObject(clean);
+        const mapped = _mapForPush(tbl, clean);
+        let encData = await encryptObject(mapped);
         // 空字符串 → null（避免 bigint / NOT NULL 列报错）
         encData = _sanitizeForPush(encData);
         // 补齐同步必需的元字段（被 clean 过滤掉了 gs_*）
